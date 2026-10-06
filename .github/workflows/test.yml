@@ -1,0 +1,89 @@
+# The plugin's tests inside the engine, then its commands for real on each system:
+# the clipboard read back with the mod's own commands, the editor server started as the
+# mod starts it, its page driven headless through a stroke and Done (test/e2e.mjs); and
+# on Linux and Windows a live Claude Code session, pasted into (test/live.mjs).
+name: test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@2.1.291
+
+      - name: Validate
+        run: claude plugin validate .
+
+      - name: Plugin tests
+        run: claude plugin test .
+
+      - name: Install playwright-core, node-pty
+        shell: bash
+        run: |
+          npm install --prefix "$RUNNER_TEMP/pw" playwright-core@1.48.2 @lydell/node-pty@1.2.0-beta.15
+          echo "PLAYWRIGHT_DIR=$RUNNER_TEMP/pw" >> "$GITHUB_ENV"
+          echo "E2E_SHOTS=$RUNNER_TEMP/shots" >> "$GITHUB_ENV"
+
+      # And CJK fonts, as a desktop set to Chinese, Japanese or Korean has, so the editor's
+      # words are measured in real glyphs rather than empty boxes.
+      - name: Linux clipboard tools, CJK fonts
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb xclip wl-clipboard fonts-noto-cjk
+
+      - name: End to end (Linux, X11)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node test/e2e.mjs --clipboard
+
+      # Claude Code itself, the mod loaded, a paste through to Enter (no request leaves
+      # the runner: the key is made up, the API's address a closed local port).
+      - name: Live session (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node test/live.mjs
+
+      - name: End to end (Windows)
+        if: runner.os == 'Windows'
+        run: node test/e2e.mjs --clipboard
+
+      - name: Live session (Windows)
+        if: runner.os == 'Windows'
+        run: node test/live.mjs
+
+      - name: The Swift panel builds; pngpaste
+        if: runner.os == 'macOS'
+        run: |
+          xcrun swiftc -O editor/panel.swift -o "$RUNNER_TEMP/panel"
+          brew install pngpaste
+
+      - name: End to end (macOS)
+        if: runner.os == 'macOS'
+        run: node test/e2e.mjs --clipboard
+
+      # The editor in each language with this system's own fonts, to look at.
+      - name: Keep the editor's pictures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-${{ runner.os }}
+          path: ${{ runner.temp }}/shots
+          if-no-files-found: ignore
