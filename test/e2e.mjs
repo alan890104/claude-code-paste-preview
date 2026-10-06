@@ -76,8 +76,12 @@ const clipboard = async () => {
   const out = joinPath(work, '1.paste.png')
   const steps = clipboardSteps(os, out, process.env)
   // As the hook does: the first step that exits 0 and leaves a file with something in it.
-  const read = steps.map(step => ({ step, done: runStep(step) })).find(({ done }) => done.status === 0 && existsSync(out) && statSync(out).size > 0)
-  if (!check(read !== undefined, `the clipboard read back with ${steps.map(s => s.argv[0] === 'sh' ? s.argv[2].split(' ')[1] : s.argv[0]).join(', then ')}`)) return
+  const tried = []
+  const read = steps.map(step => ({ step, done: runStep(step) })).find(({ step, done }) => {
+    tried.push(`${step.argv.join(' ').slice(0, 80)}: exit ${done.status}, ${existsSync(out) ? statSync(out).size : 'no'} bytes ${(done.stderr ?? '').trim()}`)
+    return done.status === 0 && existsSync(out) && statSync(out).size > 0
+  })
+  if (!check(read !== undefined, `the clipboard read back with ${steps.map(s => s.argv[0] === 'sh' ? s.argv[2].split(' ')[1] : s.argv[0]).join(', then ')}`)) return tried.forEach(line => console.log(`  ${line}`))
   console.log(`  by: ${read.step.argv.join(' ').slice(0, 120)}`)
   const back = decode(readFileSync(out))
   check(back.width === W && back.height === H, `the picture read back is ${W}×${H} (${back.width}×${back.height})`)
@@ -130,6 +134,9 @@ const closeBrowsers = () => {
 const startEditor = async (n, lang = 'en', urlOnly = flags.has('--url-only')) => {
   const out = join(os, at, `${n}.png`)
   const argv = editorArgv(os, { root: ROOT, panel: undefined, file: fixture, out, label: `Image #${n}`, terminal: '', lang })
+  // A browser already running takes the new window into itself and the process started
+  // for it leaves at once, its --app with it; so each run here starts with none of ours.
+  if (!urlOnly) closeBrowsers()
   const before = new Set(browserUrls())
   const child = spawn(argv[0], argv.slice(1), { env: { ...process.env, ...(urlOnly ? { EDITOR_URL_ONLY: '1' } : {}) }, stdio: ['ignore', 'pipe', 'inherit'] })
   let said = ''
