@@ -5,7 +5,7 @@ A [Claude Code](https://claude.com/claude-code) mod for the images you paste. In
 - **You see what you pasted.** Every `[Image #N]` in the prompt box shows as a thumbnail above the prompt, and sent prompts show theirs in the transcript, each labelled `Image #N`.
 - **You can mark it up before sending.** An editor opens the moment you paste: pen, ellipse, box, arrow, text, crop, rotate, seven colours, undo. Press Enter when done, or Esc to keep the picture as pasted.
 - **Claude gets the marked-up version.** At Enter the original paste is left out of the message and Claude is pointed at the edited picture.
-- **Full screen works on macOS.** There the editor is a native floating panel that sits over a full-screen terminal the way Spotlight does: no Space switch, and the keys return to the prompt when it closes. On Linux and Windows it opens as a browser app window.
+- **Full screen works on macOS.** There the editor is a native floating panel that sits over a full-screen terminal the way Spotlight does: no Space switch, and the keys return to the prompt when it closes. It waits ready in the background, so it appears the instant you paste (about 100 MB while it waits; after 20 minutes unused it quits, and comes back as you type). On Linux and Windows it opens as a browser app window.
 
 [繁體中文說明](#繁體中文)
 
@@ -106,7 +106,7 @@ Loading the folder once writes the engine's type declarations to `.claude-plugin
 - **看得到貼了什麼**：輸入框裡的每個 `[Image #N]` 都會在輸入框上方顯示縮圖；送出的訊息在對話紀錄裡也會顯示縮圖，標「Image #N」。
 - **送出前可以標註**：一貼上就自動跳出編輯器，有畫筆、圈、框、箭頭、文字、裁切、旋轉、七種顏色和復原。改完按 Enter，不想改就按 Esc，保留原圖。
 - **Claude 收到的是改過的圖**：按 Enter 送出時，原圖會從訊息裡拿掉，並告訴 Claude 改過的圖在哪裡，讓它去讀。
-- **macOS 上全螢幕也能用**：編輯器是原生的浮動面板，像 Spotlight 一樣浮在全螢幕的終端機上，不會切換桌面；關掉後游標直接回到輸入框。Linux 和 Windows 上，編輯器是瀏覽器的 app 視窗。
+- **macOS 上全螢幕也能用**：編輯器是原生的浮動面板，像 Spotlight 一樣浮在全螢幕的終端機上，不會切換桌面；關掉後游標直接回到輸入框。面板平常在背景待命，一貼上就立刻出現（待命時約佔 100 MB 記憶體，閒置 20 分鐘會自動關掉，打字時再開回來）。Linux 和 Windows 上，編輯器是瀏覽器的 app 視窗。
 
 ### 需求
 

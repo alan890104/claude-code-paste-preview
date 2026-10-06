@@ -10,7 +10,8 @@ import type { Env, Lang, Os, Step } from './platform'
 // once (pen, ellipse, box, arrow, text, crop, rotate); Done (Enter) puts the edited
 // picture in the paste's place, Cancel (Esc) keeps the paste, and every image in the box
 // shows as a thumbnail above the prompt. On macOS the editor is a floating panel
-// (editor/panel.swift) that sits over a full-screen terminal without switching Spaces;
+// (editor/panel.swift) that sits over a full-screen terminal without switching Spaces,
+// kept warm for the session so a paste shows it at once;
 // where Swift is missing, and on Linux and Windows, it is a page in a browser window
 // that editor/server.mjs serves and opens, under Node. What differs per system is in
 // ./platform.
@@ -71,6 +72,7 @@ let lang: Lang = 'en'
 let paths: Promise<Paths> | undefined
 let images: string | undefined
 let queue: Promise<void> = Promise.resolve()
+let warm: Promise<Warm | undefined> | undefined
 let isTicking = false
 let isClipboardToldOff = false
 const capturing = new Set<number>()
@@ -85,15 +87,22 @@ const isSame = (a: readonly number[], b: readonly number[]) => a.length === b.le
 const run = async ($: EngineInterface, argv: string[]) => (await $.process.run(argv)).stdout.trim()
 const runStep = ($: EngineInterface, step: Step) => $.process.run(step.argv, step.env === undefined ? undefined : { env: step.env })
 
-// The panel is compiled once (a few seconds) and again only when its source changes.
+// The panel is compiled once (a few seconds) for each version of its source, and named
+// by it: the mod and the panel talk to each other, so a binary another install of the
+// mod built, older or newer, never stands in for this one's. Built aside and moved in, so
+// a second session never starts a half-written one.
 const buildPanel = async ($: EngineInterface, root: string) => {
   const source = `${$.plugin.root}/editor/panel.swift`
-  const binary = `${root}/bin/panel`
+  const text = await $.fs.read(source).catch(() => '')
+  const digest = text === '' ? '' : [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].slice(0, 6).map(b => b.toString(16).padStart(2, '0')).join('')
+  const binary = digest === '' ? `${root}/bin/panel` : `${root}/bin/panel-${digest}`
   const built = await $.fs.stat(binary).catch(() => undefined)
-  if (built !== undefined && built.mtimeMs >= (await $.fs.stat(source)).mtimeMs) return binary
+  if (built !== undefined && (digest !== '' || built.mtimeMs >= (await $.fs.stat(source)).mtimeMs)) return binary
   await $.process.run(['mkdir', '-p', `${root}/bin`])
-  const made = await $.process.run(['xcrun', 'swiftc', '-O', source, '-o', binary], { timeoutMs: 120_000 }).catch(() => undefined)
-  return made?.exitCode === 0 ? binary : undefined
+  const part = `${binary}.${crypto.randomUUID().slice(0, 8)}`
+  const made = await $.process.run(['xcrun', 'swiftc', '-O', source, '-o', part], { timeoutMs: 120_000 }).catch(() => undefined)
+  if (made?.exitCode !== 0) return undefined
+  return (await $.process.run(['mv', '-f', part, binary])).exitCode === 0 ? binary : undefined
 }
 
 // Each name spelled out: $.env.get takes literals only.
@@ -135,16 +144,17 @@ const setUp = ($: EngineInterface) => {
   return paths
 }
 
-// Claude Code's own copy of paste N; it lands a moment after the placeholder does.
+// Claude Code's own copy of paste N; it lands a moment after the placeholder does, and
+// the editor waits on it, so it is looked for often (a listing costs next to nothing).
 const engineCopy = async ($: EngineInterface, n: number) => {
   const { os, tmp, session } = await setUp($)
-  for (let attempt = 0; attempt < 15; attempt++) {
+  for (let attempt = 0; attempt < 120; attempt++) {
     images ??= await imagesOf($, os, tmp, session)
     if (images !== undefined) {
       const entry = (await $.fs.list(images).catch(() => [])).find(e => new RegExp(`^${n}\\.[a-z]+$`).test(e.name))
       if (entry !== undefined) return join(os, images, entry.name)
     }
-    await $.clock.sleep(200)
+    await $.clock.sleep(25)
   }
   return undefined
 }
@@ -230,21 +240,75 @@ const refresh = async ($: EngineInterface, n: number, file: string, isEdited: bo
   return seen !== undefined
 }
 
-const edit = async ($: EngineInterface, n: number) => {
-  const shot = (await read($, shots)).find(s => s.n === n)
-  if (shot === undefined || shot.file === '') return
+// The panel kept warm (macOS): started with the session, and again on the next keystroke
+// after it quit unused, so by the time a paste lands it only has to show. Each edit is a
+// file in its requests folder, answered by a line on its output: SAVED or CANCELLED and
+// the request's id. Gone (quit, or failed to start), the edit falls back to a panel of
+// its own.
+type Warm = { requests: string; waiting: Map<string, (word: string) => void>; isUsed: boolean }
+
+const keepWarm = ($: EngineInterface) => {
+  warm ??= (async () => {
+    const { os, edits, panel } = await setUp($)
+    if (os !== 'mac' || panel === undefined) return undefined
+    const requests = `${edits}/requests`
+    await $.process.run(['mkdir', '-p', requests])
+    const held: Warm = { requests, waiting: new Map(), isUsed: false }
+    const mine = warm
+    const born = Date.now()
+    void (async () => {
+      let said = ''
+      try {
+        for await (const piece of $.process.spawn({ argv: [panel, 'serve', `${$.plugin.root}/editor/editor.html`, requests, lang] })) {
+          if (!('text' in piece) || piece.stream !== 'stdout') continue
+          said += piece.text
+          for (let end = said.indexOf('\n'); end >= 0; end = said.indexOf('\n')) {
+            const [word = '', id = ''] = said.slice(0, end).trim().split(' ')
+            said = said.slice(end + 1)
+            held.waiting.get(id)?.(word)
+            held.waiting.delete(id)
+          }
+        }
+      } catch {}
+      // Quit unused: the next keystroke starts it again. Gone at once: it will not start
+      // here, and each edit has a panel of its own.
+      if (warm === mine) warm = Date.now() - born < 10_000 && held.waiting.size === 0 && !held.isUsed ? Promise.resolve(undefined) : undefined
+      for (const done of held.waiting.values()) done('GONE')
+    })()
+    return held
+  })().catch(() => undefined)
+  return warm
+}
+
+// One picture through the warm panel: SAVED, CANCELLED, or undefined where there is none.
+const editWarm = async ($: EngineInterface, file: string, out: string, label: string) => {
+  const held = await keepWarm($)
+  if (held === undefined) return undefined
+  const id = `${Date.now().toString(36)}-${label.replace(/\D/g, '')}`
+  held.isUsed = true
+  const answer = new Promise<string>(resolve => held.waiting.set(id, resolve))
+  await $.fs.write(`${held.requests}/${id}.json`, JSON.stringify({ picture: file, out, label }))
+  const word = await answer
+  return word === 'GONE' ? undefined : word
+}
+
+const edit = async ($: EngineInterface, n: number, file?: string) => {
+  const picture = file ?? (await read($, shots)).find(s => s.n === n)?.file
+  if (picture === undefined || picture === '') return
   const { os, edits: at, terminal, panel } = await setUp($)
   const words = WORDS[lang]
   const out = join(os, at, `${n}.png`)
-  const argv = editorArgv(os, { root: $.plugin.root, panel, file: shot.file, out, label: `Image #${n}`, terminal, lang })
-  let said = ''
-  try {
-    for await (const piece of $.process.spawn({ argv })) {
-      if ('text' in piece && piece.stream === 'stdout') said += piece.text
+  let said = (await editWarm($, picture, out, `Image #${n}`).catch(() => undefined)) ?? ''
+  if (said === '') {
+    const argv = editorArgv(os, { root: $.plugin.root, panel, file: picture, out, label: `Image #${n}`, terminal, lang })
+    try {
+      for await (const piece of $.process.spawn({ argv })) {
+        if ('text' in piece && piece.stream === 'stdout') said += piece.text
+      }
+    } catch {
+      $.ui.toast(panel !== undefined ? words.noEditor : os === 'mac' ? words.noTools : words.noNode)
+      return
     }
-  } catch {
-    $.ui.toast(panel !== undefined ? words.noEditor : os === 'mac' ? words.noTools : words.noNode)
-    return
   }
   // The browser editor says when no window could be opened for it.
   if (said.includes('UNOPENED')) $.ui.toast(words.noBrowser)
@@ -252,13 +316,16 @@ const edit = async ($: EngineInterface, n: number) => {
 }
 
 // One editor at a time: three pastes in a row open one after another.
-const enqueue = ($: EngineInterface, n: number) => {
-  queue = queue.then(() => edit($, n)).catch(() => undefined)
+const enqueue = ($: EngineInterface, n: number, file?: string) => {
+  queue = queue.then(() => edit($, n, file)).catch(() => undefined)
 }
 
+// The editor opens on the file as soon as it is found; the band's thumbnail is made
+// beside it, not before it.
 const capture = async ($: EngineInterface, n: number) => {
   const file = (await engineCopy($, n)) ?? (await clipboardCopy($, n)) ?? ''
-  if (await refresh($, n, file, false)) enqueue($, n)
+  if (file !== '') enqueue($, n, file)
+  await refresh($, n, file, false)
 }
 
 // Numbers run up through a session (#1, #3, #10), so a known N is the same picture coming
@@ -349,13 +416,14 @@ export const dropOriginals = <B extends { type: string; [field: string]: unknown
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    void setUp($).catch(() => undefined)
+    void setUp($).then(() => keepWarm($)).catch(() => undefined)
     $.clock.every(500, () => void tick($).catch(() => undefined))
     return next(e)
   })
 
   on('prompt.edit', async ($, e, next) => {
     const box = await next(e)
+    void keepWarm($)
     // Only the band's list is awaited; finding the picture runs on behind it.
     await sync($, box.text).catch(() => undefined)
     return box

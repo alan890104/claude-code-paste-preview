@@ -7,7 +7,8 @@ import type { Lang, Os } from './platform'
 
 // The paste on each system, end to end inside the engine: "[Image #1]" lands in the box,
 // the mod finds Claude Code's copy where that system keeps it, draws it above the prompt,
-// opens the editor that system has, and at Enter points Claude at the edit. Beneath the
+// opens the editor that system has (on macOS the panel kept warm, which takes each
+// picture as a request file), and at Enter points Claude at the edit. Beneath the
 // mod every command and file answers as that system would; test/e2e.mjs runs the same
 // commands for real on each.
 
@@ -32,6 +33,8 @@ type System = {
   engineRoot: string
   edits: string
   editor: (root: string, file: string, out: string) => string[]
+  // The panel kept warm for the session, where the system has one.
+  warm?: (root: string) => string[]
 }
 
 const SYSTEMS: Record<Os, System> = {
@@ -41,6 +44,7 @@ const SYSTEMS: Record<Os, System> = {
     engineRoot: '/private/tmp/claude-501',
     edits: '/private/tmp/paste-preview/abcdef12',
     editor: (root, file, out) => ['/private/tmp/paste-preview/bin/panel', `${root}/editor/editor.html`, file, out, 'Image #1', 'zh-Hant'],
+    warm: root => ['/private/tmp/paste-preview/bin/panel', 'serve', `${root}/editor/editor.html`, '/private/tmp/paste-preview/abcdef12/requests', 'zh-Hant'],
   },
   linux: {
     os: 'linux',
@@ -63,7 +67,7 @@ type World = {
   runEnvs: Record<string, string>[]
   spawns: string[][]
   toasts: string[]
-  files: Map<string, { path: string; size: number; bytes?: Uint8Array }>
+  files: Map<string, { path: string; size: number; bytes?: Uint8Array; text?: string }>
   dirs: Map<string, { path: string; names: string[] }>
   context: readonly string[]
 }
@@ -75,9 +79,12 @@ const canon = (path: string) => path.replace(/\\/g, '/').replace(/^.*?([A-Za-z]:
 
 // The system beneath the mod: its variables, its commands and its files. `copy` is where
 // Claude Code kept the paste (absent: it kept none); `say` what the editor prints.
-const world = (on: On, system: System, options: { copy?: boolean; say?: string; tools?: Record<string, Answer>; pasteSize?: number; spawnFails?: boolean; culture?: string } = {}) => {
+const world = (on: On, system: System, options: { copy?: boolean; say?: string; tools?: Record<string, Answer>; pasteSize?: number; spawnFails?: boolean; warmFails?: boolean; culture?: string } = {}) => {
   const w: World = { runs: [], runEnvs: [], spawns: [], toasts: [], files: new Map(), dirs: new Map(), context: [] }
-  const file = (path: string, size: number, bytes?: Uint8Array) => w.files.set(canon(path), { path, size, bytes })
+  const file = (path: string, size: number, bytes?: Uint8Array, text?: string) => w.files.set(canon(path), { path, size, bytes, text })
+  // The warm panel's requests, as the mod writes them, for the panel below to take.
+  const requests: { id: string; text: string }[] = []
+  let wake = () => {}
   const dir = (path: string, names: string[]) => w.dirs.set(canon(path), { path, names })
   const sep = system.os === 'windows' ? '\\' : '/'
   const project = `${system.engineRoot}${sep}-home-me-project`
@@ -115,6 +122,17 @@ const world = (on: On, system: System, options: { copy?: boolean; say?: string; 
     w.spawns.push([...e.argv])
     if (options.spawnFails) return { deny: 'ENOENT: no such file or directory' }
     const word = options.say ?? 'SAVED'
+    // The warm panel: each request answered by a line naming it.
+    if (e.argv[1] === 'serve') {
+      if (options.warmFails) return { deny: 'the panel quit' }
+      for (;;) {
+        while (requests.length === 0) await new Promise<void>(resolve => (wake = resolve))
+        const { id, text } = requests.shift()!
+        const { out } = JSON.parse(text) as { out: string }
+        if (word === 'SAVED') file(out, 400_000, pngBytes(1600, 900))
+        yield { stream: 'stdout' as const, text: `${word} ${id}\n` }
+      }
+    }
     // The editor writes the edit, and in the browser its small copy beside it.
     const out = e.argv[3] ?? ''
     if (word === 'SAVED') {
@@ -138,7 +156,12 @@ const world = (on: On, system: System, options: { copy?: boolean; say?: string; 
   on('fs.list', ($, e) => ({ value: (w.dirs.get(canon(e.path))?.names ?? []).map(name => ({ name, kind: name.includes('.') ? ('file' as const) : ('dir' as const), size: 0, mtimeMs: 0, isLink: false })) }))
   on('fs.exists', ($, e) => ({ value: w.dirs.has(canon(e.path)) || w.files.has(canon(e.path)) }))
   on('fs.write', ($, e) => {
-    file(e.path, 0)
+    file(e.path, e.text.length, undefined, e.text)
+    const request = /[\\/]requests[\\/]([^\\/]+)\.json$/.exec(e.path)
+    if (request !== null) {
+      requests.push({ id: request[1] ?? '', text: e.text })
+      wake()
+    }
     return { value: undefined }
   })
   // What reaches Claude at Enter: the notes beside the prompt. (Which block is left out
@@ -184,8 +207,16 @@ for (const os of ['mac', 'linux', 'windows'] as const) {
     await until(clock, () => w.spawns.length > 0)
     const sep = os === 'windows' ? '\\' : '/'
     const out = `${system.edits}${sep}1.png`
-    const root = w.spawns[0]?.[1]?.replace(/[\\/]editor[\\/](editor\.html|server\.mjs)$/, '') ?? ''
-    expect(w.spawns[0]).toEqual(system.editor(root, pasted, out))
+    const root = w.spawns[0]?.find(a => /[\\/]editor[\\/](editor\.html|server\.mjs)$/.test(a))?.replace(/[\\/]editor[\\/](editor\.html|server\.mjs)$/, '') ?? ''
+    if (system.warm === undefined) expect(w.spawns[0]).toEqual(system.editor(root, pasted, out))
+    else {
+      // Warm from the session's start; the paste is a request it takes.
+      expect(w.spawns[0]).toEqual(system.warm(root))
+      await until(clock, () => [...w.files.values()].some(f => f.text?.includes(pasted)))
+      const request = [...w.files.values()].find(f => /[\\/]requests[\\/][^\\/]+\.json$/.test(f.path))
+      expect(JSON.parse(request?.text ?? '{}')).toEqual({ picture: pasted, out, label: 'Image #1' })
+      expect(w.spawns).toHaveLength(1)
+    }
 
     // Where the mod made its folder, and how it clears old ones.
     if (os === 'windows') expect(w.files.has(canon(`${system.edits}\\.keep`))).toBe(true)
@@ -266,6 +297,19 @@ test('without node, or without a browser, the editor says why it did not open', 
   await paste($, box)
   await until(clock, () => w.toasts.length > 0)
   expect(w.toasts).toEqual(['The editor did not open: node was not found'])
+})
+
+test('mac: a warm panel that will not start leaves each paste a panel of its own', async ($, on) => {
+  const clock = mock.clock(on)
+  const { w, pasted, box } = world(on, SYSTEMS.mac, { warmFails: true })
+  await paste($, box)
+  await until(clock, () => w.spawns.length > 1)
+  const root = w.spawns[0]?.[2]?.replace(/\/editor\/editor\.html$/, '') ?? ''
+  expect(w.spawns[1]).toEqual(SYSTEMS.mac.editor(root, pasted, `${SYSTEMS.mac.edits}/1.png`))
+  // Not started again on every keystroke: once gone at the start, it stays gone.
+  box.text = '[Image #1] and'
+  await until(clock, () => false)
+  expect(w.spawns.filter(argv => argv[1] === 'serve')).toHaveLength(1)
 })
 
 test('a browser that could not be opened is said', async ($, on) => {

@@ -116,6 +116,8 @@ if (host) document.body.classList.add('panel')
 const query = new URLSearchParams(location.search)
 const token = query.get('t')
 const label = query.get('n')
+// Kept warm by the panel for a session: the page waits, and each paste opens in it.
+const isWarm = query.get('warm') === '1'
 
 // The words follow the system's language, which the plugin passes as ?lang= (en,
 // zh-Hant, zh-Hans, ja, ko); opened without it, the browser's, read the same way. The
@@ -160,7 +162,8 @@ const langOf = tag => {
 const lang = langOf(query.get('lang') || navigator.language)
 const words = WORDS[lang]
 document.documentElement.lang = lang
-document.title = label ? `${words.title} ${label}` : words.title
+const titleOf = name => (name ? `${words.title} ${name}` : words.title)
+document.title = titleOf(label)
 for (const id of ['cancel', 'done', 'apply']) {
   const el = document.getElementById(id)
   el.textContent = words[id]
@@ -688,7 +691,37 @@ picture.onload = () => {
     moveTo(Math.round(screen.availLeft + (screen.availWidth - w) / 2), Math.round(screen.availTop + (screen.availHeight - h) / 2))
   } catch {}
 }
-picture.src = `/image?t=${token}`
+// A picture that cannot be read keeps the paste as it was.
+picture.onerror = () => cancel()
+
+// Every picture starts as the first did: nothing drawn, the pen, red.
+const clear = () => {
+  history = []
+  crop = null
+  drag = null
+  noteAt = null
+  note.hidden = true
+  isFinished = false
+  placeApply()
+  pick('pen')
+  paintColor(COLORS[0])
+}
+
+// The warm panel's two calls: a paste comes in, and the panel has been hidden again.
+window.openPicture = (id, name) => {
+  clear()
+  document.title = titleOf(name)
+  picture.src = `/image?id=${encodeURIComponent(id)}`
+}
+window.closePicture = () => {
+  clear()
+  picture.removeAttribute('src')
+  // The last picture's pixels go; a canvas of none cannot be drawn, so one of one.
+  setBase(canvasOf(1, 1))
+}
+
+if (isWarm && host) host.postMessage({ kind: 'warm' })
+else picture.src = `/image?t=${token}`
 </script>
 </body>
 </html>
