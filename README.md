@@ -78,9 +78,10 @@ claude --plugin-dir .            # run Claude Code with the mod loaded from this
 claude plugin validate .         # what the engine will load and refuse
 claude plugin test .             # hooks/*.test.tsx: the band, the send, and a paste on each system
 node test/e2e.mjs [--clipboard]  # the mod's own commands for real on this machine (Node 22.6+)
+node test/live.mjs               # Linux, Windows: a live session pasted into, offline
 ```
 
-`test/e2e.mjs` puts a picture on the clipboard and reads it back with the commands the mod runs, starts the editor server as the mod does, draws on the page with a headless browser and checks the edited picture lands where the mod reads it. It needs `playwright-core` (`PLAYWRIGHT_DIR` names a folder whose `node_modules` holds it) and Chrome. CI (`.github/workflows/test.yml`) runs it with the plugin tests on macOS, Linux and Windows.
+`test/e2e.mjs` puts a picture on the clipboard and reads it back with the commands the mod runs, starts the editor server as the mod does, draws on the page with a headless browser and checks the edited picture lands where the mod reads it. It needs `playwright-core` (`PLAYWRIGHT_DIR` names a folder whose `node_modules` holds it) and Chrome. `test/live.mjs` starts Claude Code itself with the mod in a pseudo-terminal (`@lydell/node-pty`, in the same folder), pastes with Claude Code's own key, draws in the editor the mod opens, presses Enter and reads the transcript; its key is made up and the API's address is a closed local port, so nothing is sent. CI (`.github/workflows/test.yml`) runs them with the plugin tests on macOS, Linux and Windows (the live session on Linux and Windows).
 
 Loading the folder once writes the engine's type declarations to `.claude-plugin/types/`; after that, `tsc -p .` type-checks the mod.
 

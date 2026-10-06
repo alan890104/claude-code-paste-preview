@@ -75,12 +75,18 @@ const clipboard = async () => {
   if (!(await putOnClipboard())) return
   const out = joinPath(work, '1.paste.png')
   const steps = clipboardSteps(os, out, process.env)
-  // As the hook does: the first step that exits 0 and leaves a file with something in it.
+  // As the hook does: step by step, up to the first that exits 0 and leaves a file with
+  // something in it (the next would empty that file as its shell opens it).
   const tried = []
-  const read = steps.map(step => ({ step, done: runStep(step) })).find(({ step, done }) => {
+  let read
+  for (const step of steps) {
+    const done = runStep(step)
     tried.push(`${step.argv.join(' ').slice(0, 80)}: exit ${done.status}, ${existsSync(out) ? statSync(out).size : 'no'} bytes ${(done.stderr ?? '').trim()}`)
-    return done.status === 0 && existsSync(out) && statSync(out).size > 0
-  })
+    if (done.status === 0 && existsSync(out) && statSync(out).size > 0) {
+      read = { step, done }
+      break
+    }
+  }
   if (!check(read !== undefined, `the clipboard read back with ${steps.map(s => s.argv[0] === 'sh' ? s.argv[2].split(' ')[1] : s.argv[0]).join(', then ')}`)) return tried.forEach(line => console.log(`  ${line}`))
   console.log(`  by: ${read.step.argv.join(' ').slice(0, 120)}`)
   const back = decode(readFileSync(out))
@@ -262,6 +268,11 @@ try {
     await browser.close()
   }
 } finally {
+  // The xclip or wl-copy left serving the clipboard (Linux), named by this run's picture.
+  if (os === 'linux' && flags.has('--clipboard')) {
+    if (process.env.WAYLAND_DISPLAY) spawnSync('wl-copy', ['--clear'])
+    spawnSync('pkill', ['-f', '--', fixture])
+  }
   closeBrowsers()
   rmSync(at, { recursive: true, force: true })
   rmSync(work, { recursive: true, force: true })
