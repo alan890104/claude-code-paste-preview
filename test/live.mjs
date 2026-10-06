@@ -116,7 +116,9 @@ try {
   term.write(os === 'windows' ? '\x1bv' : '\x16')
   // The terminal redraws the box in pieces, so the words may come apart.
   check(await waitFor(() => /\[Image[^\]]{0,24}#1\]/.test(screen), 30_000), `${os === 'windows' ? 'Alt+V' : 'Ctrl+V'} pasted the picture: [Image #1] in the box`)
-  const kept = filesUnder(engineRoot(os, process.env, uid), joinPath('images', '1.png'))
+  // Claude Code writes its copy just after the placeholder lands, as the mod allows for.
+  let kept = []
+  await waitFor(() => (kept = filesUnder(engineRoot(os, process.env, uid), joinPath('images', '1.png'))).length > 0, 10_000)
   check(kept.length > 0, `Claude Code kept the paste where the mod looks for it (${kept[0] ?? engineRoot(os, process.env, uid)})`)
 
   let url
