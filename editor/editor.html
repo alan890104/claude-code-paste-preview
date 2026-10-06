@@ -1,0 +1,620 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Edit image</title>
+<style>
+  :root {
+    --bg: #0e0e10;
+    --bar: rgba(30, 30, 33, 0.92);
+    --line: rgba(255, 255, 255, 0.08);
+    --t1: #f2f2f5;
+    --t2: #8e8e96;
+    --hover: rgba(255, 255, 255, 0.08);
+    --on: rgba(255, 255, 255, 0.16);
+    --accent: #0a84ff;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--t1); overflow: hidden; }
+  body {
+    display: grid; grid-template-rows: minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr);
+    font: 14px/1.2 -apple-system, BlinkMacSystemFont, 'PingFang TC', 'Helvetica Neue', sans-serif;
+    -webkit-font-smoothing: antialiased; user-select: none;
+  }
+  #stage { position: relative; display: grid; place-items: center; min-width: 0; min-height: 0; overflow: hidden; padding: 20px 24px 8px; }
+  body.panel #stage { padding-top: 40px; }
+  #view { display: block; touch-action: none; border-radius: 4px; box-shadow: 0 0 0 1px var(--line), 0 12px 40px rgba(0, 0, 0, 0.5); }
+  #view.pen, #view.shape, #view.crop { cursor: crosshair; }
+  #view.text { cursor: text; }
+  #note {
+    position: absolute; min-width: 2ch; margin: 0; padding: 0; border: 0; outline: none; background: transparent;
+    font-weight: 600; line-height: 1.25; white-space: pre; resize: none; overflow: hidden; caret-color: currentColor;
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang TC', 'Helvetica Neue', sans-serif;
+  }
+  #note[hidden] { display: none; }
+  #apply { position: absolute; display: none; }
+  #apply.on { display: block; }
+
+  #bar {
+    display: flex; align-items: center; gap: 16px; padding: 10px 16px 14px;
+  }
+  #bar .side { flex: 1 1 0; display: flex; }
+  #bar .side.end { justify-content: flex-end; }
+  .tools { display: flex; align-items: center; gap: 2px; padding: 4px; background: var(--bar); border: 1px solid var(--line); border-radius: 12px; }
+  .sep { width: 1px; height: 20px; margin: 0 6px; background: var(--line); }
+  button {
+    font: inherit; color: inherit; background: none; border: 0; cursor: pointer; border-radius: 8px;
+  }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .tool { display: grid; place-items: center; width: 36px; height: 36px; color: var(--t2); }
+  .tool:hover { background: var(--hover); color: var(--t1); }
+  .tool[aria-pressed='true'] { background: var(--on); color: var(--t1); }
+  .tool svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .swatch { display: grid; place-items: center; width: 28px; height: 36px; }
+  .swatch i { display: block; width: 18px; height: 18px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18); transition: transform 0.12s; }
+  .swatch:hover i { transform: scale(1.12); }
+  .swatch[aria-pressed='true'] i { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--t1); }
+  .text-button { height: 36px; padding: 0 16px; font-weight: 500; }
+  .quiet { color: var(--t2); }
+  .quiet:hover { color: var(--t1); background: var(--hover); }
+  .primary { background: var(--accent); color: #fff; }
+  .primary:hover { filter: brightness(1.1); }
+  .apply { height: 30px; padding: 0 12px; font-size: 13px; font-weight: 500; background: var(--t1); color: #000; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4); }
+
+  #gtip {
+    position: fixed; z-index: 9; padding: 5px 8px; border-radius: 6px; background: #2c2c30; color: var(--t1);
+    font-size: 12px; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 0.12s;
+  }
+  #gtip.on { opacity: 1; }
+  #gtip kbd { margin-left: 8px; font: inherit; color: var(--t2); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="view"></canvas>
+  <textarea id="note" rows="1" spellcheck="false" hidden></textarea>
+  <button id="apply" class="apply" type="button">Apply</button>
+</div>
+<div id="bar">
+  <div class="side"><button id="cancel" class="text-button quiet" type="button" data-tip="Cancel" data-key="esc">Cancel</button></div>
+  <div class="tools" role="toolbar">
+    <button class="tool" data-tool="pen" data-tip="Pen" data-key="P" aria-pressed="true"><svg viewBox="0 0 24 24"><path d="M4 20c3-1 5-3 7-5l7.5-7.5a2.1 2.1 0 0 0-3-3L8 12c-2 2-4 4-4 8Z"/></svg></button>
+    <button class="tool" data-tool="ellipse" data-tip="Ellipse" data-key="O" aria-pressed="false"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8.5" ry="6.5"/></svg></button>
+    <button class="tool" data-tool="rect" data-tip="Box" data-key="B" aria-pressed="false"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2"/></svg></button>
+    <button class="tool" data-tool="arrow" data-tip="Arrow" data-key="A" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M5 19 19 5M10 5h9v9"/></svg></button>
+    <button class="tool" data-tool="text" data-tip="Text" data-key="T" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M5 6V5h14v1M12 5v14M9 19h6"/></svg></button>
+    <span class="sep"></span>
+    <button class="tool" data-tool="crop" data-tip="Crop" data-key="C" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M7 3v14h14M3 7h14v14"/></svg></button>
+    <button class="tool" id="rotate" data-tip="Rotate" data-key="R"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/></svg></button>
+    <button class="tool" id="undo" data-tip="Undo" data-key="⌘Z"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+    <span class="sep"></span>
+    <div id="swatches" style="display: flex"></div>
+  </div>
+  <div class="side end"><button id="done" class="text-button primary" type="button" data-tip="Done" data-key="↩">Done</button></div>
+</div>
+<div id="gtip"></div>
+<script>
+'use strict'
+// In the floating panel the page talks to it; in a browser window, to the little server.
+const host = window.webkit?.messageHandlers?.editor
+if (host) document.body.classList.add('panel')
+const query = new URLSearchParams(location.search)
+const token = query.get('t')
+const label = query.get('n')
+
+// The words follow the Mac's language, which the plugin passes as ?lang=.
+const WORDS = {
+  zh: {
+    title: '編輯圖片', cancel: '取消', done: '完成', apply: '套用',
+    pen: '畫筆', ellipse: '圈', rect: '框', arrow: '箭頭', text: '文字', crop: '裁切', rotate: '旋轉', undo: '復原',
+    colors: ['紅', '橘', '黃', '綠', '藍', '白', '黑'],
+  },
+  en: {
+    title: 'Edit image', cancel: 'Cancel', done: 'Done', apply: 'Apply',
+    pen: 'Pen', ellipse: 'Ellipse', rect: 'Box', arrow: 'Arrow', text: 'Text', crop: 'Crop', rotate: 'Rotate', undo: 'Undo',
+    colors: ['Red', 'Orange', 'Yellow', 'Green', 'Blue', 'White', 'Black'],
+  },
+}
+const lang = /^zh/i.test(query.get('lang') || navigator.language) ? 'zh' : 'en'
+const words = WORDS[lang]
+document.documentElement.lang = lang === 'zh' ? 'zh-Hant' : 'en'
+document.title = label ? `${words.title} ${label}` : words.title
+for (const id of ['cancel', 'done', 'apply']) {
+  const el = document.getElementById(id)
+  el.textContent = words[id]
+  if (el.dataset.tip) el.dataset.tip = words[id]
+}
+for (const el of document.querySelectorAll('[data-tool]')) el.dataset.tip = words[el.dataset.tool]
+document.getElementById('rotate').dataset.tip = words.rotate
+document.getElementById('undo').dataset.tip = words.undo
+
+const COLORS = ['#ff3b30', '#ff9f0a', '#ffd60a', '#30d158', '#0a84ff', '#ffffff', '#000000']
+const HISTORY = 30
+const view = document.getElementById('view')
+const ctx = view.getContext('2d')
+const stage = document.getElementById('stage')
+const note = document.getElementById('note')
+const apply = document.getElementById('apply')
+
+let base = document.createElement('canvas')
+let history = []
+let tool = 'pen'
+let color = COLORS[0]
+let scale = 1
+let drag = null
+let crop = null
+let noteAt = null
+let isFinished = false
+
+const canvasOf = (w, h) => Object.assign(document.createElement('canvas'), { width: w, height: h })
+const copy = source => {
+  const c = canvasOf(source.width, source.height)
+  c.getContext('2d').drawImage(source, 0, 0)
+  return c
+}
+// Lines and letters scale with the picture, so a full-screen Retina shot and a small crop read alike.
+const lineWidth = () => Math.max(3, Math.round(Math.max(base.width, base.height) / 320))
+const fontSize = () => Math.max(16, Math.round(Math.max(base.width, base.height) / 36))
+const contrast = c => (c === '#ffffff' || c === '#ffd60a' || c === '#30d158' || c === '#ff9f0a' ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.85)')
+
+const remember = () => {
+  history.push(copy(base))
+  if (history.length > HISTORY) history.shift()
+}
+
+const fit = () => {
+  const room = stage.getBoundingClientRect()
+  const w = room.width - 48
+  const h = room.height - 28
+  scale = Math.min(w / base.width, h / base.height, 1 / devicePixelRatio)
+  view.style.width = `${Math.round(base.width * scale)}px`
+  view.style.height = `${Math.round(base.height * scale)}px`
+  placeApply()
+}
+
+const toImage = event => {
+  const r = view.getBoundingClientRect()
+  return { x: ((event.clientX - r.left) * view.width) / r.width, y: ((event.clientY - r.top) * view.height) / r.height }
+}
+
+// ——— drawing ———
+
+const drawPen = (g, points, c, width) => {
+  g.strokeStyle = c
+  g.lineWidth = width
+  g.lineCap = 'round'
+  g.lineJoin = 'round'
+  g.beginPath()
+  g.moveTo(points[0].x, points[0].y)
+  if (points.length === 1) g.lineTo(points[0].x + 0.01, points[0].y)
+  // Through the midpoints, so a quick stroke is a curve and not a polygon.
+  for (let i = 1; i < points.length - 1; i++) {
+    const mx = (points[i].x + points[i + 1].x) / 2
+    const my = (points[i].y + points[i + 1].y) / 2
+    g.quadraticCurveTo(points[i].x, points[i].y, mx, my)
+  }
+  const last = points[points.length - 1]
+  g.lineTo(last.x, last.y)
+  g.stroke()
+}
+
+const drawShape = (g, kind, a, b, c, width, isEven) => {
+  g.strokeStyle = c
+  g.lineWidth = width
+  g.lineCap = 'round'
+  g.lineJoin = 'round'
+  let w = b.x - a.x
+  let h = b.y - a.y
+  if (isEven && kind !== 'arrow') {
+    const side = Math.max(Math.abs(w), Math.abs(h))
+    w = Math.sign(w || 1) * side
+    h = Math.sign(h || 1) * side
+  }
+  g.beginPath()
+  if (kind === 'ellipse') {
+    g.ellipse(a.x + w / 2, a.y + h / 2, Math.abs(w / 2), Math.abs(h / 2), 0, 0, Math.PI * 2)
+  } else if (kind === 'rect') {
+    g.roundRect(Math.min(a.x, a.x + w), Math.min(a.y, a.y + h), Math.abs(w), Math.abs(h), width)
+  } else {
+    const angle = Math.atan2(h, w)
+    const head = Math.max(width * 4, 18)
+    g.moveTo(a.x, a.y)
+    g.lineTo(b.x, b.y)
+    g.moveTo(b.x - head * Math.cos(angle - 0.45), b.y - head * Math.sin(angle - 0.45))
+    g.lineTo(b.x, b.y)
+    g.lineTo(b.x - head * Math.cos(angle + 0.45), b.y - head * Math.sin(angle + 0.45))
+  }
+  g.stroke()
+}
+
+const paint = () => {
+  ctx.clearRect(0, 0, view.width, view.height)
+  ctx.drawImage(base, 0, 0)
+  if (drag?.kind === 'pen') drawPen(ctx, drag.points, color, lineWidth())
+  if (drag && ['ellipse', 'rect', 'arrow'].includes(drag.kind)) drawShape(ctx, drag.kind, drag.from, drag.to, color, lineWidth(), drag.isEven)
+  if (crop) {
+    const r = cropRect()
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.beginPath()
+    ctx.rect(0, 0, view.width, view.height)
+    ctx.rect(r.x, r.y, r.w, r.h)
+    ctx.fill('evenodd')
+    const px = 1 / scale
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)'
+    ctx.lineWidth = 1.5 * px
+    ctx.strokeRect(r.x, r.y, r.w, r.h)
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)'
+    ctx.lineWidth = px
+    ctx.beginPath()
+    for (const f of [1 / 3, 2 / 3]) {
+      ctx.moveTo(r.x + r.w * f, r.y)
+      ctx.lineTo(r.x + r.w * f, r.y + r.h)
+      ctx.moveTo(r.x, r.y + r.h * f)
+      ctx.lineTo(r.x + r.w, r.y + r.h * f)
+    }
+    ctx.stroke()
+    ctx.restore()
+  }
+}
+
+let frame = 0
+const repaint = () => {
+  if (frame) return
+  frame = requestAnimationFrame(() => {
+    frame = 0
+    paint()
+  })
+}
+
+const setBase = next => {
+  base = next
+  view.width = base.width
+  view.height = base.height
+  fit()
+  paint()
+}
+
+// ——— crop ———
+
+const cropRect = () => {
+  const x = Math.max(0, Math.min(crop.from.x, crop.to.x))
+  const y = Math.max(0, Math.min(crop.from.y, crop.to.y))
+  const w = Math.min(base.width, Math.max(crop.from.x, crop.to.x)) - x
+  const h = Math.min(base.height, Math.max(crop.from.y, crop.to.y)) - y
+  return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) }
+}
+
+const placeApply = () => {
+  const isReady = crop !== null && !drag && cropRect().w > 4 && cropRect().h > 4
+  apply.classList.toggle('on', isReady)
+  if (!isReady) return
+  const r = cropRect()
+  const v = view.getBoundingClientRect()
+  const s = stage.getBoundingClientRect()
+  const right = v.left - s.left + (r.x + r.w) * scale
+  const bottom = v.top - s.top + (r.y + r.h) * scale
+  apply.style.left = `${Math.max(8, right - apply.offsetWidth)}px`
+  apply.style.top = `${Math.min(s.height - apply.offsetHeight - 4, bottom + 8)}px`
+}
+
+const applyCrop = () => {
+  if (!crop) return false
+  const r = cropRect()
+  crop = null
+  placeApply()
+  if (r.w < 4 || r.h < 4) {
+    paint()
+    return false
+  }
+  remember()
+  const next = canvasOf(r.w, r.h)
+  next.getContext('2d').drawImage(base, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h)
+  setBase(next)
+  return true
+}
+
+// ——— text ———
+
+const openNote = at => {
+  commitNote()
+  noteAt = at
+  const v = view.getBoundingClientRect()
+  const s = stage.getBoundingClientRect()
+  const size = fontSize() * scale
+  note.hidden = false
+  note.value = ''
+  note.style.left = `${v.left - s.left + at.x * scale}px`
+  note.style.top = `${v.top - s.top + at.y * scale - size * 0.62}px`
+  note.style.fontSize = `${size}px`
+  note.style.color = color
+  const ring = contrast(color)
+  const o = Math.max(1, size * 0.07)
+  note.style.textShadow = `${o}px 0 ${ring}, -${o}px 0 ${ring}, 0 ${o}px ${ring}, 0 -${o}px ${ring}`
+  sizeNote()
+  note.focus()
+}
+
+const sizeNote = () => {
+  note.style.width = '0px'
+  note.style.height = '0px'
+  note.style.width = `${note.scrollWidth + 4}px`
+  note.style.height = `${note.scrollHeight}px`
+}
+
+const commitNote = () => {
+  if (noteAt === null) return
+  const text = note.value.replace(/\s+$/, '')
+  const at = noteAt
+  noteAt = null
+  note.hidden = true
+  if (text === '') return
+  remember()
+  const g = base.getContext('2d')
+  const size = fontSize()
+  g.font = `600 ${size}px -apple-system, BlinkMacSystemFont, 'PingFang TC', 'Helvetica Neue', sans-serif`
+  g.textBaseline = 'middle'
+  g.lineJoin = 'round'
+  g.strokeStyle = contrast(color)
+  g.lineWidth = size * 0.16
+  g.fillStyle = color
+  text.split('\n').forEach((line, i) => {
+    const y = at.y + i * size * 1.25
+    g.strokeText(line, at.x, y)
+    g.fillText(line, at.x, y)
+  })
+  paint()
+}
+
+note.addEventListener('input', sizeNote)
+note.addEventListener('keydown', event => {
+  event.stopPropagation()
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault()
+    commitNote()
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    noteAt = null
+    note.hidden = true
+  }
+})
+note.addEventListener('blur', () => setTimeout(commitNote, 0))
+
+// ——— pointer ———
+
+view.addEventListener('pointerdown', event => {
+  if (event.button !== 0) return
+  const at = toImage(event)
+  if (tool === 'text') {
+    event.preventDefault()
+    openNote(at)
+    return
+  }
+  commitNote()
+  view.setPointerCapture(event.pointerId)
+  if (tool === 'crop') {
+    crop = { from: at, to: at }
+    drag = { kind: 'crop' }
+  } else if (tool === 'pen') {
+    drag = { kind: 'pen', points: [at] }
+  } else {
+    drag = { kind: tool, from: at, to: at, isEven: event.shiftKey }
+  }
+  placeApply()
+  repaint()
+})
+
+view.addEventListener('pointermove', event => {
+  if (!drag) return
+  const at = toImage(event)
+  if (drag.kind === 'crop') crop.to = at
+  else if (drag.kind === 'pen') drag.points.push(at)
+  else {
+    drag.to = at
+    drag.isEven = event.shiftKey
+  }
+  repaint()
+})
+
+const release = () => {
+  if (!drag) return
+  const done = drag
+  drag = null
+  if (done.kind === 'crop') {
+    placeApply()
+    repaint()
+    return
+  }
+  remember()
+  const g = base.getContext('2d')
+  if (done.kind === 'pen') drawPen(g, done.points, color, lineWidth())
+  else if (Math.hypot(done.to.x - done.from.x, done.to.y - done.from.y) > 3) drawShape(g, done.kind, done.from, done.to, color, lineWidth(), done.isEven)
+  else history.pop()
+  paint()
+}
+view.addEventListener('pointerup', release)
+view.addEventListener('pointercancel', release)
+
+// ——— controls ———
+
+const tools = [...document.querySelectorAll('[data-tool]')]
+const pick = next => {
+  commitNote()
+  if (next !== 'crop' && crop) {
+    crop = null
+    placeApply()
+  }
+  tool = next
+  for (const b of tools) b.setAttribute('aria-pressed', String(b.dataset.tool === tool))
+  view.className = tool === 'pen' ? 'pen' : tool === 'text' ? 'text' : tool === 'crop' ? 'crop' : 'shape'
+  paint()
+}
+for (const b of tools) b.addEventListener('click', () => pick(b.dataset.tool))
+
+const swatches = document.getElementById('swatches')
+const paintColor = next => {
+  color = next
+  for (const b of swatches.children) b.setAttribute('aria-pressed', String(b.dataset.color === color))
+  if (noteAt !== null) {
+    note.style.color = color
+    note.focus()
+  }
+}
+COLORS.forEach((c, i) => {
+  const b = document.createElement('button')
+  b.className = 'swatch'
+  b.dataset.color = c
+  b.dataset.tip = words.colors[i]
+  b.dataset.key = String(i + 1)
+  b.innerHTML = `<i style="background:${c}"></i>`
+  b.addEventListener('mousedown', event => event.preventDefault())
+  b.addEventListener('click', () => paintColor(c))
+  swatches.append(b)
+})
+paintColor(color)
+
+const rotate = () => {
+  commitNote()
+  crop = null
+  placeApply()
+  remember()
+  const next = canvasOf(base.height, base.width)
+  const g = next.getContext('2d')
+  g.translate(next.width, 0)
+  g.rotate(Math.PI / 2)
+  g.drawImage(base, 0, 0)
+  setBase(next)
+}
+
+const undo = () => {
+  if (noteAt !== null) {
+    noteAt = null
+    note.hidden = true
+    return
+  }
+  if (crop) {
+    crop = null
+    placeApply()
+    paint()
+    return
+  }
+  const last = history.pop()
+  if (last) setBase(last)
+}
+
+const post = (path, body) => fetch(`${path}?t=${token}`, { method: 'POST', body })
+
+const asBase64 = blob => new Promise(resolve => {
+  const reader = new FileReader()
+  reader.onload = () => resolve(String(reader.result).split(',')[1])
+  reader.readAsDataURL(blob)
+})
+
+const finish = async () => {
+  if (isFinished) return
+  commitNote()
+  applyCrop()
+  isFinished = true
+  // Nothing changed: the paste stays as it was, not a re-encoded copy.
+  if (history.length === 0) {
+    if (host) return host.postMessage({ kind: 'cancel' })
+    await post('/cancel')
+  } else {
+    const png = await new Promise(resolve => base.toBlob(resolve, 'image/png'))
+    if (host) return host.postMessage({ kind: 'save', png: await asBase64(png) })
+    await post('/save', png)
+  }
+  window.close()
+}
+
+const cancel = async () => {
+  if (isFinished) return
+  isFinished = true
+  if (host) return host.postMessage({ kind: 'cancel' })
+  await post('/cancel')
+  window.close()
+}
+
+document.getElementById('rotate').addEventListener('click', rotate)
+document.getElementById('undo').addEventListener('click', undo)
+document.getElementById('done').addEventListener('click', finish)
+document.getElementById('cancel').addEventListener('click', cancel)
+apply.addEventListener('click', applyCrop)
+
+const KEYS = { p: 'pen', o: 'ellipse', b: 'rect', a: 'arrow', t: 'text', c: 'crop' }
+addEventListener('keydown', event => {
+  if (event.isComposing) return
+  const key = event.key.toLowerCase()
+  if ((event.metaKey || event.ctrlKey) && key === 'z') {
+    event.preventDefault()
+    return undo()
+  }
+  if (event.metaKey && key === 'w') {
+    event.preventDefault()
+    return cancel()
+  }
+  if (event.metaKey || event.ctrlKey || event.altKey) return
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    if (crop && cropRect().w > 4) applyCrop()
+    else finish()
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    if (crop) undo()
+    else cancel()
+  } else if (KEYS[key]) pick(KEYS[key])
+  else if (key === 'r') rotate()
+  else if (/^[1-7]$/.test(key)) paintColor(COLORS[Number(key) - 1])
+})
+
+// A window closed by its red button keeps the original picture.
+addEventListener('pagehide', () => {
+  if (!isFinished && !host) navigator.sendBeacon(`/cancel?t=${token}`)
+})
+
+// Tooltips: the name, then its key.
+const tip = document.getElementById('gtip')
+let tipTimer = 0
+document.addEventListener('pointerover', event => {
+  const el = event.target.closest('[data-tip]')
+  clearTimeout(tipTimer)
+  tip.classList.remove('on')
+  if (!el) return
+  tipTimer = setTimeout(() => {
+    tip.innerHTML = `${el.dataset.tip}${el.dataset.key ? `<kbd>${el.dataset.key}</kbd>` : ''}`
+    const r = el.getBoundingClientRect()
+    tip.style.left = `${Math.max(8, Math.min(innerWidth - tip.offsetWidth - 8, r.left + r.width / 2 - tip.offsetWidth / 2))}px`
+    tip.style.top = `${r.top - tip.offsetHeight - 8}px`
+    tip.classList.add('on')
+  }, 300)
+})
+
+// The panel is sized after the page loads; follow the stage, not only the window.
+new ResizeObserver(() => base.width > 0 && fit()).observe(stage)
+
+// ——— open ———
+
+const picture = new Image()
+picture.onload = () => {
+  const first = canvasOf(picture.naturalWidth, picture.naturalHeight)
+  first.getContext('2d').drawImage(picture, 0, 0)
+  setBase(first)
+  // The window takes the picture's shape, at most most of the screen.
+  if (host) return host.postMessage({ kind: 'size', width: first.width, height: first.height })
+  const bar = 70
+  const room = { w: screen.availWidth * 0.86, h: screen.availHeight * 0.88 }
+  const chrome = { w: outerWidth - innerWidth, h: outerHeight - innerHeight }
+  const s = Math.min((room.w - 48) / first.width, (room.h - bar - 28 - chrome.h) / first.height, 1 / devicePixelRatio)
+  const w = Math.max(760, Math.round(first.width * s + 48 + chrome.w))
+  const h = Math.max(480, Math.round(first.height * s + bar + 28 + chrome.h))
+  try {
+    resizeTo(w, h)
+    moveTo(Math.round(screen.availLeft + (screen.availWidth - w) / 2), Math.round(screen.availTop + (screen.availHeight - h) / 2))
+  } catch {}
+}
+picture.src = `/image?t=${token}`
+</script>
+</body>
+</html>
