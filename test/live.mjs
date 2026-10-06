@@ -112,6 +112,7 @@ try {
   if (!check(ready, 'Claude Code started with the mod loaded and showed its prompt')) throw new Error(screen.slice(-2000))
 
   closeBrowsers()
+  const pasted = screen.length
   term.write(os === 'windows' ? '\x1bv' : '\x16')
   // The terminal redraws the box in pieces, so the words may come apart.
   check(await waitFor(() => /\[Image[^\]]{0,24}#1\]/.test(screen), 30_000), `${os === 'windows' ? 'Alt+V' : 'Ctrl+V'} pasted the picture: [Image #1] in the box`)
@@ -121,7 +122,7 @@ try {
   let url
   await waitFor(() => (url = browserUrls()[0]) !== undefined, 60_000)
   if (!check(url !== undefined, 'the paste opened the editor in a browser window')) throw new Error(screen.slice(-2000))
-  check(/Image #1/.test(screen), 'the band above the prompt names the paste')
+  check(await waitFor(() => /Edit/.test(screen.slice(pasted)), 15_000), 'the band above the prompt shows the paste, with its Edit button')
 
   const page = await browser.newPage()
   await page.goto(url)
