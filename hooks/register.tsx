@@ -1,15 +1,19 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, ImageSource, Register } from 'claude-code'
 
 import type { Shot } from '../types'
+import { clipboardSteps, editorArgv, editsRoot, engineRoot, fromBase64, headStep, isMissing, join, LANGUAGE_PS, langOf, localeOf, osOf, sizeOf, sweepStep, thumbOf } from './platform'
+import type { Env, Lang, Os, Step } from './platform'
 
 // paste-preview: a pasted image is only "[Image #1]" in the prompt box, which says
 // nothing about which picture it is. So, as in a chat app, a paste opens an editor at
 // once (pen, ellipse, box, arrow, text, crop, rotate); Done (Enter) puts the edited
 // picture in the paste's place, Cancel (Esc) keeps the paste, and every image in the box
-// shows as a thumbnail above the prompt. The editor is a floating panel
+// shows as a thumbnail above the prompt. On macOS the editor is a floating panel
 // (editor/panel.swift) that sits over a full-screen terminal without switching Spaces;
-// where Swift is missing, a Chrome app window (editor/server.mjs).
+// where Swift is missing, and on Linux and Windows, it is a page in a browser window
+// that editor/server.mjs serves and opens, under Node. What differs per system is in
+// ./platform.
 //
 // How the picture travels: Claude Code writes each paste to
 // <tmp>/claude-<uid>/<project>/<session>/images/<N>.png (an internal layout, not an API:
@@ -31,25 +35,44 @@ const CELL = 2
 // A thumbnail's height in rows, above the prompt as in the transcript.
 const ROWS = 8
 const THUMB_PX = '480'
-const EDITS_ROOT = '/private/tmp/paste-preview'
-const KEEP_DAYS = '+7'
+// What $.fs.read hands over at most, and what an Image takes as bytes at most.
+const READABLE = 4 * 1024 * 1024
+const DRAWABLE = 2 * 1024 * 1024
 
-type Lang = 'zh' | 'en'
-type Paths = { edits: string; tmp: string; session: string; terminal: string; panel: string | undefined; lang: Lang }
+type Paths = { os: Os; edits: string; tmp: string; session: string; terminal: string; panel: string | undefined; lang: Lang; env: Env }
 
-// The words follow the Mac's first language: Chinese for zh-*, English otherwise.
+// The words follow the system's language (./platform says how it is read): Traditional
+// or Simplified Chinese, Japanese, Korean, or English. The terms follow macOS Preview.
 const WORDS = {
-  zh: { edit: '編輯', edited: '已編輯', noEditor: '編輯器沒有打開', noTools: '編輯器沒有打開：找不到 Swift 或 node' },
-  en: { edit: 'Edit', edited: 'edited', noEditor: 'The editor did not open', noTools: 'The editor did not open: neither Swift nor node was found' },
+  'zh-Hant': {
+    edit: '編輯', edited: '已編輯', noEditor: '編輯器沒有打開', noTools: '編輯器沒有打開：找不到 Swift 或 node', noNode: '編輯器沒有打開：找不到 node',
+    noBrowser: '編輯器沒有打開：找不到瀏覽器', noClipboard: { linux: '讀不到剪貼簿：請安裝 wl-clipboard 或 xclip', windows: '讀不到剪貼簿：找不到 PowerShell' },
+  },
+  'zh-Hans': {
+    edit: '编辑', edited: '已编辑', noEditor: '编辑器没有打开', noTools: '编辑器没有打开：找不到 Swift 或 node', noNode: '编辑器没有打开：找不到 node',
+    noBrowser: '编辑器没有打开：找不到浏览器', noClipboard: { linux: '读不到剪贴板：请安装 wl-clipboard 或 xclip', windows: '读不到剪贴板：找不到 PowerShell' },
+  },
+  ja: {
+    edit: '編集', edited: '編集済み', noEditor: 'エディタを開けませんでした', noTools: 'エディタを開けませんでした：Swift も node も見つかりません', noNode: 'エディタを開けませんでした：node が見つかりません',
+    noBrowser: 'エディタを開けませんでした：ブラウザが見つかりません', noClipboard: { linux: 'クリップボードを読み取れませんでした：wl-clipboard か xclip をインストールしてください', windows: 'クリップボードを読み取れませんでした：PowerShell が見つかりません' },
+  },
+  ko: {
+    edit: '편집', edited: '편집됨', noEditor: '편집기를 열지 못했습니다', noTools: '편집기를 열지 못했습니다: Swift도 node도 찾을 수 없습니다', noNode: '편집기를 열지 못했습니다: node를 찾을 수 없습니다',
+    noBrowser: '편집기를 열지 못했습니다: 브라우저를 찾을 수 없습니다', noClipboard: { linux: '클립보드를 읽지 못했습니다: wl-clipboard 또는 xclip을 설치하세요', windows: '클립보드를 읽지 못했습니다: PowerShell을 찾을 수 없습니다' },
+  },
+  en: {
+    edit: 'Edit', edited: 'edited', noEditor: 'The editor did not open', noTools: 'The editor did not open: neither Swift nor node was found', noNode: 'The editor did not open: node was not found',
+    noBrowser: 'The editor did not open: no browser was found', noClipboard: { linux: 'Could not read the clipboard: install wl-clipboard or xclip', windows: 'Could not read the clipboard: PowerShell was not found' },
+  },
 }
 let lang: Lang = 'en'
 
 // Module variables start over on a hot reload; everything a drawing reads is in $.state.
 let paths: Promise<Paths> | undefined
-let edits: string | undefined
 let images: string | undefined
 let queue: Promise<void> = Promise.resolve()
 let isTicking = false
+let isClipboardToldOff = false
 const capturing = new Set<number>()
 const thumbs = new Map<string, string>()
 
@@ -60,77 +83,148 @@ const numbersIn = (text: string) => [...new Set([...text.matchAll(PLACEHOLDER)].
 const isSame = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every((n, i) => n === b[i])
 
 const run = async ($: EngineInterface, argv: string[]) => (await $.process.run(argv)).stdout.trim()
+const runStep = ($: EngineInterface, step: Step) => $.process.run(step.argv, step.env === undefined ? undefined : { env: step.env })
 
 // The panel is compiled once (a few seconds) and again only when its source changes.
-const buildPanel = async ($: EngineInterface) => {
+const buildPanel = async ($: EngineInterface, root: string) => {
   const source = `${$.plugin.root}/editor/panel.swift`
-  const binary = `${EDITS_ROOT}/bin/panel`
+  const binary = `${root}/bin/panel`
   const built = await $.fs.stat(binary).catch(() => undefined)
   if (built !== undefined && built.mtimeMs >= (await $.fs.stat(source)).mtimeMs) return binary
-  await $.process.run(['mkdir', '-p', `${EDITS_ROOT}/bin`])
+  await $.process.run(['mkdir', '-p', `${root}/bin`])
   const made = await $.process.run(['xcrun', 'swiftc', '-O', source, '-o', binary], { timeoutMs: 120_000 }).catch(() => undefined)
   return made?.exitCode === 0 ? binary : undefined
+}
+
+// Each name spelled out: $.env.get takes literals only.
+const readEnv = async ($: EngineInterface): Promise<Env> => {
+  const [CLAUDE_CODE_TMPDIR, TMPDIR, TMP, TEMP, SystemRoot, WAYLAND_DISPLAY] = await Promise.all([
+    $.env.get('CLAUDE_CODE_TMPDIR'), $.env.get('TMPDIR'), $.env.get('TMP'), $.env.get('TEMP'), $.env.get('SystemRoot'), $.env.get('WAYLAND_DISPLAY'),
+  ])
+  return { CLAUDE_CODE_TMPDIR, TMPDIR, TMP, TEMP, SystemRoot, WAYLAND_DISPLAY }
+}
+
+const languageOf = async ($: EngineInterface, os: Os) => {
+  if (os === 'mac') return run($, ['defaults', 'read', '-g', 'AppleLanguages']).catch(() => '')
+  if (os === 'windows') return run($, ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', LANGUAGE_PS]).catch(() => '')
+  const [LC_ALL, LC_MESSAGES, LANG] = await Promise.all([$.env.get('LC_ALL'), $.env.get('LC_MESSAGES'), $.env.get('LANG')])
+  return localeOf({ LC_ALL, LC_MESSAGES, LANG })
 }
 
 const setUp = ($: EngineInterface) => {
   paths ??= (async () => {
     const session = await $.session.id()
-    const uid = await run($, ['id', '-u'])
-    const at = `${EDITS_ROOT}/${session.slice(0, 8)}`
-    await $.process.run(['mkdir', '-p', at])
+    const osVariable = await $.env.get('OS')
+    const os = osOf($.plugin.root, osVariable, osVariable === 'Windows_NT' ? '' : await run($, ['uname', '-s']).catch(() => ''))
+    const env = await readEnv($)
+    const uid = os === 'windows' ? '' : await run($, ['id', '-u'])
+    const root = editsRoot(os, env, uid)
+    const at = join(os, root, session.slice(0, 8))
+    // Windows has no mkdir to run; a file written there makes the folders on the way.
+    if (os === 'windows') await $.fs.write(join(os, at, '.keep'), '')
+    else await $.process.run(os === 'mac' ? ['mkdir', '-p', at] : ['mkdir', '-p', '-m', '700', root, at])
     // Old sessions' edits are no use to anyone after a week.
-    void $.process.run(['find', EDITS_ROOT, '-mindepth', '1', '-maxdepth', '1', '-type', 'd', '-not', '-name', 'bin', '-mtime', KEEP_DAYS, '-exec', 'rm', '-rf', '{}', '+']).catch(() => undefined)
-    const terminal = await run($, ['printenv', 'TERM_PROGRAM']).catch(() => '')
-    // Claude Code's own temp folder: CLAUDE_CODE_TMPDIR when set, else /tmp, as it resolves it.
-    const base = (await run($, ['printenv', 'CLAUDE_CODE_TMPDIR']).catch(() => '')) || '/tmp'
-    const tmp = (await $.fs.stat(`${base}/claude-${uid}`, { resolve: true }).catch(() => undefined))?.realPath ?? `/private/tmp/claude-${uid}`
-    const languages = await run($, ['defaults', 'read', '-g', 'AppleLanguages']).catch(() => '')
-    lang = /^[\s(]*"?zh/.test(languages) ? 'zh' : 'en'
-    edits = at
-    return { edits: at, tmp, session, terminal, panel: await buildPanel($), lang }
+    void runStep($, sweepStep(os, root)).catch(() => undefined)
+    const terminal = (await $.env.get('TERM_PROGRAM')) ?? ''
+    // Claude Code's own temp folder, as it resolves it (./platform says how, per system).
+    const base = engineRoot(os, env, uid)
+    const tmp = (await $.fs.stat(base, { resolve: true }).catch(() => undefined))?.realPath ?? (os === 'mac' ? `/private/tmp/claude-${uid}` : base)
+    lang = langOf(os, await languageOf($, os))
+    return { os, edits: at, tmp, session, terminal, panel: os === 'mac' ? await buildPanel($, root) : undefined, lang, env }
   })()
   return paths
 }
 
 // Claude Code's own copy of paste N; it lands a moment after the placeholder does.
 const engineCopy = async ($: EngineInterface, n: number) => {
-  const { tmp, session } = await setUp($)
+  const { os, tmp, session } = await setUp($)
   for (let attempt = 0; attempt < 15; attempt++) {
-    images ??= (await run($, ['find', tmp, '-maxdepth', '3', '-type', 'd', '-path', `*/${session}/images`]).catch(() => '')).split('\n')[0] || undefined
+    images ??= await imagesOf($, os, tmp, session)
     if (images !== undefined) {
       const entry = (await $.fs.list(images).catch(() => [])).find(e => new RegExp(`^${n}\\.[a-z]+$`).test(e.name))
-      if (entry !== undefined) return `${images}/${entry.name}`
+      if (entry !== undefined) return join(os, images, entry.name)
     }
     await $.clock.sleep(200)
   }
   return undefined
 }
 
-// Only where Claude Code kept no copy: the clipboard still holds what was just pasted.
-const clipboardCopy = async ($: EngineInterface, n: number) => {
-  const file = `${(await setUp($)).edits}/${n}.paste.png`
-  const pasted = await $.process.run(['pngpaste', file]).catch(() => undefined)
-  return pasted?.exitCode === 0 ? file : undefined
+// <tmp>/<project>/<session>/images, the project's folder named as Claude Code names it.
+const imagesOf = async ($: EngineInterface, os: Os, tmp: string, session: string) => {
+  for (const entry of await $.fs.list(tmp).catch(() => [])) {
+    if (entry.kind === 'file') continue
+    const at = join(os, tmp, entry.name, session, 'images')
+    if (await $.fs.exists(at).catch(() => false)) return at
+  }
+  return undefined
 }
+
+// Only where Claude Code kept no copy: the clipboard still holds what was just pasted.
+// Where no tool to read it is there at all, the person is told once what to install.
+const clipboardCopy = async ($: EngineInterface, n: number) => {
+  const { os, edits, env } = await setUp($)
+  const file = join(os, edits, `${n}.paste.png`)
+  const steps = clipboardSteps(os, file, env)
+  let missing = 0
+  for (const step of steps) {
+    const pasted = await runStep($, step).catch(() => undefined)
+    if (isMissing(pasted?.exitCode)) missing += 1
+    else if (pasted?.exitCode === 0 && ((await $.fs.stat(file).catch(() => undefined))?.size ?? 0) > 0) return file
+  }
+  if (os !== 'mac' && missing === steps.length && !isClipboardToldOff) {
+    isClipboardToldOff = true
+    $.ui.toast(WORDS[lang].noClipboard[os])
+  }
+  return undefined
+}
+
+// A picture's size and first bytes, without a tool where the file is small enough to read.
+const header = async ($: EngineInterface, os: Os, file: string) => {
+  const { size } = await $.fs.stat(file)
+  if (size <= READABLE) {
+    const { base64 } = await $.fs.read(file, { as: 'bytes' })
+    return { size, seen: sizeOf(fromBase64(base64.slice(0, 87_384))) }
+  }
+  const head = await runStep($, headStep(os, file))
+  return { size, seen: head.exitCode === 0 ? sizeOf(fromBase64(head.stdout)) : undefined }
+}
+
+type Look = { width: number; height: number; thumb: string; isLarge: boolean }
 
 // Size and a small PNG for the band: a screenshot can be 10 MB, the band needs 480 px.
-const look = async ($: EngineInterface, n: number, file: string) => {
-  const info = await $.process.run(['sips', '-g', 'pixelWidth', '-g', 'pixelHeight', file])
-  const width = Number(/pixelWidth: (\d+)/.exec(info.stdout)?.[1] ?? 0)
-  const height = Number(/pixelHeight: (\d+)/.exec(info.stdout)?.[1] ?? 0)
-  const thumb = `${(await setUp($)).edits}/${n}.thumb.png`
-  const made = await $.process.run(['sips', '-s', 'format', 'png', '-Z', THUMB_PX, file, '--out', thumb])
-  return made.exitCode === 0 && width > 0 && height > 0 ? { width, height, thumb } : undefined
+// sips makes it on macOS. No tool for it comes with every Linux or Windows, so there
+// the size is read from the file's header and the band draws the picture itself, the
+// terminal scaling it: as bytes up to 2 MiB, by its name past that. An edit made in the
+// browser comes with its own small copy, which stands in for it.
+const look = async ($: EngineInterface, n: number, file: string, small?: string): Promise<Look | undefined> => {
+  const { os, edits } = await setUp($)
+  if (os === 'mac') {
+    const info = await $.process.run(['sips', '-g', 'pixelWidth', '-g', 'pixelHeight', file])
+    const width = Number(/pixelWidth: (\d+)/.exec(info.stdout)?.[1] ?? 0)
+    const height = Number(/pixelHeight: (\d+)/.exec(info.stdout)?.[1] ?? 0)
+    const thumb = `${edits}/${n}.thumb.png`
+    const made = await $.process.run(['sips', '-s', 'format', 'png', '-Z', THUMB_PX, file, '--out', thumb])
+    return made.exitCode === 0 && width > 0 && height > 0 ? { width, height, thumb, isLarge: false } : undefined
+  }
+  if (small !== undefined) {
+    const { seen } = await header($, os, small).catch(() => ({ seen: undefined }))
+    if (seen?.isPng) return { width: seen.width, height: seen.height, thumb: small, isLarge: false }
+  }
+  const { size, seen } = await header($, os, file)
+  if (seen === undefined) return undefined
+  // A JPEG (Claude Code keeps a large paste as one) has no picture in the band, only its
+  // name; the terminal draws PNG alone.
+  return { width: seen.width, height: seen.height, thumb: seen.isPng ? file : '', isLarge: size > DRAWABLE }
 }
 
-const refresh = async ($: EngineInterface, n: number, file: string, isEdited: boolean) => {
-  const seen = file === '' ? undefined : await look($, n, file).catch(() => undefined)
+const refresh = async ($: EngineInterface, n: number, file: string, isEdited: boolean, small?: string) => {
+  const seen = file === '' ? undefined : await look($, n, file, small).catch(() => undefined)
   await update($, shots, list => {
     const was = list.find(s => s.n === n)
     const gen = (was?.gen ?? -1) + 1
     const shot: Shot = seen === undefined
-      ? { n, file: '', thumb: '', gen, width: 0, height: 0, isEdited, ratio: 0 }
-      : { n, file, thumb: seen.thumb, gen, width: seen.width, height: seen.height, isEdited, ratio: isEdited && was !== undefined ? was.ratio : seen.width / seen.height }
+      ? { n, file: '', thumb: '', gen, width: 0, height: 0, isEdited, ratio: 0, isLarge: false }
+      : { n, file, thumb: seen.thumb, gen, width: seen.width, height: seen.height, isEdited, ratio: isEdited && was !== undefined ? was.ratio : seen.width / seen.height, isLarge: seen.isLarge }
     return [...list.filter(s => s.n !== n), shot]
   })
   return seen !== undefined
@@ -139,22 +233,22 @@ const refresh = async ($: EngineInterface, n: number, file: string, isEdited: bo
 const edit = async ($: EngineInterface, n: number) => {
   const shot = (await read($, shots)).find(s => s.n === n)
   if (shot === undefined || shot.file === '') return
-  const { edits: at, terminal, panel } = await setUp($)
+  const { os, edits: at, terminal, panel } = await setUp($)
   const words = WORDS[lang]
-  const out = `${at}/${n}.png`
-  const argv = panel !== undefined
-    ? [panel, `${$.plugin.root}/editor/editor.html`, shot.file, out, `Image #${n}`, lang]
-    : ['node', `${$.plugin.root}/editor/server.mjs`, shot.file, out, `Image #${n}`, terminal, lang]
+  const out = join(os, at, `${n}.png`)
+  const argv = editorArgv(os, { root: $.plugin.root, panel, file: shot.file, out, label: `Image #${n}`, terminal, lang })
   let said = ''
   try {
     for await (const piece of $.process.spawn({ argv })) {
       if ('text' in piece && piece.stream === 'stdout') said += piece.text
     }
   } catch {
-    $.ui.toast(panel !== undefined ? words.noEditor : words.noTools)
+    $.ui.toast(panel !== undefined ? words.noEditor : os === 'mac' ? words.noTools : words.noNode)
     return
   }
-  if (said.includes('SAVED')) await refresh($, n, out, true)
+  // The browser editor says when no window could be opened for it.
+  if (said.includes('UNOPENED')) $.ui.toast(words.noBrowser)
+  if (said.includes('SAVED')) await refresh($, n, out, true, panel === undefined ? thumbOf(out) : undefined)
 }
 
 // One editor at a time: three pastes in a row open one after another.
@@ -191,13 +285,16 @@ const tick = async ($: EngineInterface) => {
   }
 }
 
-const picture = async ($: EngineInterface, shot: Shot) => {
+// What an Image draws: the thumbnail's bytes, read once per version, or for a picture
+// past what bytes may carry (2 MiB), its file's name, which the terminal reads itself.
+const picture = async ($: EngineInterface, shot: Shot): Promise<ImageSource> => {
+  if (shot.isLarge) return { file: shot.thumb, format: 'png', generation: shot.gen }
   const at = `${shot.thumb}:${shot.gen}`
   const held = thumbs.get(at)
-  if (held !== undefined) return held
+  if (held !== undefined) return { png: held }
   const { base64 } = await $.fs.read(shot.thumb, { as: 'bytes' })
   thumbs.set(at, base64)
-  return base64
+  return { png: base64 }
 }
 
 // Every thumbnail the same height, side by side: `tallest` rows, fewer only where they
@@ -224,19 +321,8 @@ const bandRows = (screenRows: number | undefined) => (screenRows === undefined ?
 export const ratioOf = (block: { type: string; [field: string]: unknown }) => {
   const source = block.source as { type?: string; data?: string } | undefined
   if (block.type !== 'image' || source?.type !== 'base64' || typeof source.data !== 'string') return undefined
-  const bytes = Uint8Array.from(atob(source.data.slice(0, 87_384)), c => c.charCodeAt(0))
-  const at = (i: number) => bytes[i] ?? 0
-  if (at(0) === 0x89 && at(1) === 0x50) return ((at(16) << 24) | (at(17) << 16) | (at(18) << 8) | at(19)) / ((at(20) << 24) | (at(21) << 16) | (at(22) << 8) | at(23))
-  if (at(0) === 0x47 && at(1) === 0x49) return (at(6) | (at(7) << 8)) / (at(8) | (at(9) << 8))
-  if (at(0) === 0xff && at(1) === 0xd8) {
-    for (let i = 2; i + 8 < bytes.length; ) {
-      if (at(i) !== 0xff) return undefined
-      const marker = at(i + 1)
-      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return ((at(i + 7) << 8) | at(i + 8)) / ((at(i + 5) << 8) | at(i + 6))
-      i += 2 + ((at(i + 2) << 8) | at(i + 3))
-    }
-  }
-  return undefined
+  const seen = sizeOf(fromBase64(source.data.slice(0, 87_384)))
+  return seen === undefined ? undefined : seen.width / seen.height
 }
 
 type Wanted = { n: number; rank: number; ratio: number }
@@ -316,12 +402,12 @@ export const register: Register = on => {
         </Box>
         <Box flexDirection="row" flexWrap="wrap" columnGap={2} paddingLeft={2} marginTop={1}>
           {drawn.map((shot, i) => {
-            const png = pictures[i]
+            const source = pictures[i]
             const size = sizes[i]
             return (
               <Box key={`sent-${shot.n}`} flexDirection="column">
-                {png !== undefined && size !== undefined && (
-                  <Image key={`sent-img-${shot.n}`} source={{ png }} columns={size.columns} rows={size.rows} alt={`Image #${shot.n}`} />
+                {source !== undefined && size !== undefined && (
+                  <Image key={`sent-img-${shot.n}`} source={source} columns={size.columns} rows={size.rows} alt={`Image #${shot.n}`} />
                 )}
                 <Text key={`sent-name-${shot.n}`} dimColor>Image #{shot.n}{shot.isEdited ? ` ${WORDS[lang].edited}` : ''}</Text>
               </Box>
@@ -348,13 +434,13 @@ export const register: Register = on => {
         {ns.map((n, i) => {
           const shot = all.find(s => s.n === n)
           const at = shot === undefined ? -1 : drawn.indexOf(shot)
-          const png = pictures[at]
+          const source = pictures[at]
           const size = sizes[at]
           const hotkey = i < 9 ? { hotkey: String(i + 1) } : {}
           return (
             <Box key={`shot-${n}`} flexDirection="column">
-              {png !== undefined && size !== undefined && (
-                <Image key={`img-${n}`} source={{ png }} columns={size.columns} rows={size.rows} alt={`#${n}`} />
+              {source !== undefined && size !== undefined && (
+                <Image key={`img-${n}`} source={source} columns={size.columns} rows={size.rows} alt={`#${n}`} />
               )}
               <Box flexDirection="row" columnGap={1}>
                 <Text key={`name-${n}`} dimColor>Image #{n}{shot?.isEdited ? ` ${WORDS[lang].edited}` : ''}</Text>

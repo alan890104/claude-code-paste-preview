@@ -14,13 +14,18 @@
     --hover: rgba(255, 255, 255, 0.08);
     --on: rgba(255, 255, 255, 0.16);
     --accent: #0a84ff;
+    --font: -apple-system, BlinkMacSystemFont, 'PingFang TC', 'Helvetica Neue', 'Segoe UI', 'Microsoft JhengHei', 'Noto Sans CJK TC', system-ui, sans-serif;
     color-scheme: dark;
   }
+  /* The page's lang picks the CJK face, so a shared character is drawn as that language writes it. */
+  :root:lang(zh-Hans) { --font: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', 'Segoe UI', 'Microsoft YaHei', 'Noto Sans CJK SC', system-ui, sans-serif; }
+  :root:lang(ja) { --font: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Helvetica Neue', 'Segoe UI', 'Yu Gothic UI', Meiryo, 'Noto Sans CJK JP', system-ui, sans-serif; }
+  :root:lang(ko) { --font: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Helvetica Neue', 'Segoe UI', 'Malgun Gothic', 'Noto Sans CJK KR', system-ui, sans-serif; }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--t1); overflow: hidden; }
   body {
     display: grid; grid-template-rows: minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr);
-    font: 14px/1.2 -apple-system, BlinkMacSystemFont, 'PingFang TC', 'Helvetica Neue', sans-serif;
+    font: 14px/1.2 var(--font);
     -webkit-font-smoothing: antialiased; user-select: none;
   }
   #stage { position: relative; display: grid; place-items: center; min-width: 0; min-height: 0; overflow: hidden; padding: 20px 24px 8px; }
@@ -31,7 +36,7 @@
   #note {
     position: absolute; min-width: 2ch; margin: 0; padding: 0; border: 0; outline: none; background: transparent;
     font-weight: 600; line-height: 1.25; white-space: pre; resize: none; overflow: hidden; caret-color: currentColor;
-    font-family: -apple-system, BlinkMacSystemFont, 'PingFang TC', 'Helvetica Neue', sans-serif;
+    font-family: var(--font);
   }
   #note[hidden] { display: none; }
   #apply { position: absolute; display: none; }
@@ -40,7 +45,10 @@
   #bar {
     display: flex; align-items: center; gap: 16px; padding: 10px 16px 14px;
   }
-  #bar .side { flex: 1 1 0; display: flex; }
+  #bar .side { flex: 1 1 0; display: flex; min-width: max-content; }
+  /* A long word (キャンセル) in the smallest window: the bar draws closer rather than wrap it. */
+  body.tight #bar { gap: 12px; }
+  body.tight .text-button { padding: 0 10px; }
   #bar .side.end { justify-content: flex-end; }
   .tools { display: flex; align-items: center; gap: 2px; padding: 4px; background: var(--bar); border: 1px solid var(--line); border-radius: 12px; }
   .sep { width: 1px; height: 20px; margin: 0 6px; background: var(--line); }
@@ -56,7 +64,7 @@
   .swatch i { display: block; width: 18px; height: 18px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18); transition: transform 0.12s; }
   .swatch:hover i { transform: scale(1.12); }
   .swatch[aria-pressed='true'] i { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--t1); }
-  .text-button { height: 36px; padding: 0 16px; font-weight: 500; }
+  .text-button { height: 36px; padding: 0 16px; font-weight: 500; white-space: nowrap; }
   .quiet { color: var(--t2); }
   .quiet:hover { color: var(--t1); background: var(--hover); }
   .primary { background: var(--accent); color: #fff; }
@@ -68,6 +76,10 @@
     font-size: 12px; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 0.12s;
   }
   #gtip.on { opacity: 1; }
+  #closed { display: none; place-items: center; height: 100%; color: var(--t2); font-size: 15px; }
+  body.closed { display: block; }
+  body.closed > :not(#closed) { display: none; }
+  body.closed #closed { display: grid; }
   #gtip kbd { margin-left: 8px; font: inherit; color: var(--t2); }
 </style>
 </head>
@@ -95,6 +107,7 @@
   <div class="side end"><button id="done" class="text-button primary" type="button" data-tip="Done" data-key="↩">Done</button></div>
 </div>
 <div id="gtip"></div>
+<div id="closed"></div>
 <script>
 'use strict'
 // In the floating panel the page talks to it; in a browser window, to the little server.
@@ -104,22 +117,49 @@ const query = new URLSearchParams(location.search)
 const token = query.get('t')
 const label = query.get('n')
 
-// The words follow the Mac's language, which the plugin passes as ?lang=.
+// The words follow the system's language, which the plugin passes as ?lang= (en,
+// zh-Hant, zh-Hans, ja, ko); opened without it, the browser's, read the same way. The
+// terms follow macOS Preview.
 const WORDS = {
-  zh: {
-    title: '編輯圖片', cancel: '取消', done: '完成', apply: '套用',
+  'zh-Hant': {
+    title: '編輯圖片', cancel: '取消', done: '完成', apply: '套用', closed: '可以關掉這個分頁了',
     pen: '畫筆', ellipse: '圈', rect: '框', arrow: '箭頭', text: '文字', crop: '裁切', rotate: '旋轉', undo: '復原',
     colors: ['紅', '橘', '黃', '綠', '藍', '白', '黑'],
   },
+  'zh-Hans': {
+    title: '编辑图片', cancel: '取消', done: '完成', apply: '应用', closed: '可以关掉这个标签页了',
+    pen: '画笔', ellipse: '圈', rect: '框', arrow: '箭头', text: '文字', crop: '裁剪', rotate: '旋转', undo: '撤销',
+    colors: ['红', '橙', '黄', '绿', '蓝', '白', '黑'],
+  },
+  ja: {
+    title: '画像を編集', cancel: 'キャンセル', done: '完了', apply: '適用', closed: 'このタブは閉じてかまいません',
+    pen: 'ペン', ellipse: '楕円', rect: '四角形', arrow: '矢印', text: 'テキスト', crop: '切り取り', rotate: '回転', undo: '取り消す',
+    colors: ['赤', 'オレンジ', '黄', '緑', '青', '白', '黒'],
+  },
+  ko: {
+    title: '이미지 편집', cancel: '취소', done: '완료', apply: '적용', closed: '이 탭은 닫아도 됩니다',
+    pen: '펜', ellipse: '타원', rect: '사각형', arrow: '화살표', text: '텍스트', crop: '자르기', rotate: '회전', undo: '실행 취소',
+    colors: ['빨강', '주황', '노랑', '초록', '파랑', '흰색', '검정'],
+  },
   en: {
-    title: 'Edit image', cancel: 'Cancel', done: 'Done', apply: 'Apply',
+    title: 'Edit image', cancel: 'Cancel', done: 'Done', apply: 'Apply', closed: 'You can close this tab',
     pen: 'Pen', ellipse: 'Ellipse', rect: 'Box', arrow: 'Arrow', text: 'Text', crop: 'Crop', rotate: 'Rotate', undo: 'Undo',
     colors: ['Red', 'Orange', 'Yellow', 'Green', 'Blue', 'White', 'Black'],
   },
 }
-const lang = /^zh/i.test(query.get('lang') || navigator.language) ? 'zh' : 'en'
+// As hooks/platform.ts reads a tag: Traditional Chinese for Hant, TW, HK and MO, Simplified
+// for any other zh, Japanese, Korean, else English.
+const langOf = tag => {
+  const parts = String(tag || '').trim().replace(/[.@].*$/, '').toLowerCase().split(/[-_]/)
+  if (parts[0] === 'ja' || parts[0] === 'ko') return parts[0]
+  if (parts[0] !== 'zh') return 'en'
+  if (parts.includes('hant')) return 'zh-Hant'
+  if (parts.includes('hans')) return 'zh-Hans'
+  return parts.some(part => part === 'tw' || part === 'hk' || part === 'mo') ? 'zh-Hant' : 'zh-Hans'
+}
+const lang = langOf(query.get('lang') || navigator.language)
 const words = WORDS[lang]
-document.documentElement.lang = lang === 'zh' ? 'zh-Hant' : 'en'
+document.documentElement.lang = lang
 document.title = label ? `${words.title} ${label}` : words.title
 for (const id of ['cancel', 'done', 'apply']) {
   const el = document.getElementById(id)
@@ -129,6 +169,8 @@ for (const id of ['cancel', 'done', 'apply']) {
 for (const el of document.querySelectorAll('[data-tool]')) el.dataset.tip = words[el.dataset.tool]
 document.getElementById('rotate').dataset.tip = words.rotate
 document.getElementById('undo').dataset.tip = words.undo
+// Undo is ⌘Z on a Mac and Ctrl+Z elsewhere; the key handler takes either.
+if (!/Mac|iPhone|iPad/.test(navigator.platform)) document.getElementById('undo').dataset.key = 'Ctrl+Z'
 
 const COLORS = ['#ff3b30', '#ff9f0a', '#ffd60a', '#30d158', '#0a84ff', '#ffffff', '#000000']
 const HISTORY = 30
@@ -354,7 +396,7 @@ const commitNote = () => {
   remember()
   const g = base.getContext('2d')
   const size = fontSize()
-  g.font = `600 ${size}px -apple-system, BlinkMacSystemFont, 'PingFang TC', 'Helvetica Neue', sans-serif`
+  g.font = `600 ${size}px ${getComputedStyle(document.documentElement).getPropertyValue('--font').trim()}`
   g.textBaseline = 'middle'
   g.lineJoin = 'round'
   g.strokeStyle = contrast(color)
@@ -506,6 +548,28 @@ const undo = () => {
 
 const post = (path, body) => fetch(`${path}?t=${token}`, { method: 'POST', body })
 
+// The band above the prompt draws a small copy, made here where a canvas is at hand
+// (off macOS no tool on the system makes one): at most 480 px a side, as sips makes it.
+const THUMB = 480
+const thumbnail = () => {
+  const s = Math.min(1, THUMB / Math.max(base.width, base.height))
+  const small = canvasOf(Math.max(1, Math.round(base.width * s)), Math.max(1, Math.round(base.height * s)))
+  const g = small.getContext('2d')
+  g.imageSmoothingQuality = 'high'
+  g.drawImage(base, 0, 0, small.width, small.height)
+  return new Promise(resolve => small.toBlob(resolve, 'image/png'))
+}
+
+// A browser tab the person opened (the default browser, not an app window) will not
+// close itself; it says it is done instead.
+const closeWindow = () => {
+  window.close()
+  setTimeout(() => {
+    document.getElementById('closed').textContent = words.closed
+    document.body.classList.add('closed')
+  }, 300)
+}
+
 const asBase64 = blob => new Promise(resolve => {
   const reader = new FileReader()
   reader.onload = () => resolve(String(reader.result).split(',')[1])
@@ -524,9 +588,10 @@ const finish = async () => {
   } else {
     const png = await new Promise(resolve => base.toBlob(resolve, 'image/png'))
     if (host) return host.postMessage({ kind: 'save', png: await asBase64(png) })
+    await post('/thumb', await thumbnail())
     await post('/save', png)
   }
-  window.close()
+  closeWindow()
 }
 
 const cancel = async () => {
@@ -534,7 +599,7 @@ const cancel = async () => {
   isFinished = true
   if (host) return host.postMessage({ kind: 'cancel' })
   await post('/cancel')
-  window.close()
+  closeWindow()
 }
 
 document.getElementById('rotate').addEventListener('click', rotate)
@@ -593,6 +658,15 @@ document.addEventListener('pointerover', event => {
 
 // The panel is sized after the page loads; follow the stage, not only the window.
 new ResizeObserver(() => base.width > 0 && fit()).observe(stage)
+
+// Drawn closer only where the words would not fit as they are.
+const bar = document.getElementById('bar')
+const tighten = () => {
+  document.body.classList.remove('tight')
+  if (bar.scrollWidth > bar.clientWidth + 1) document.body.classList.add('tight')
+}
+new ResizeObserver(tighten).observe(bar)
+document.fonts.ready.then(tighten)
 
 // ——— open ———
 
