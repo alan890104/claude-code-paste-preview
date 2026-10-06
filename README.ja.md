@@ -5,6 +5,16 @@
   <p><a href="README.md">English</a> | <a href="README.zh-TW.md">繁體中文</a> | <a href="README.zh-CN.md">简体中文</a> | <strong>日本語</strong> | <a href="README.ko.md">한국어</a></p>
 </div>
 
+## インストール
+
+ターミナルで開いた Claude Code のセッションのプロンプトに、次を入力します。
+
+```
+/plugin install paste-preview --marketplace alan890104/claude-code-paste-preview
+```
+
+`y` と答えてマーケットプレイスを追加し、スコープを選びます（ユーザースコープなら、すべてのセッションで読み込まれます）。すぐに有効になり、再起動は不要です。
+
 https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 
 [Claude Code](https://claude.com/claude-code) 用の mod で、貼り付けた画像を扱います。ターミナルでは、貼り付けた画像は `[Image #1]` と表示されるだけで、3 枚貼ると、どれがどれだか分からなくなります。この mod を入れると、次のようになります。
@@ -27,16 +37,6 @@ https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 | Windows | Node.js 18 以降（`node.exe` が `PATH` にあること）。エディタは Microsoft Edge のアプリウィンドウで開き（Edge がない場合は Chrome）、それもなければ既定のブラウザで開きます。 | 不要：組み込みの PowerShell を使います |
 
 足りないものがあると、mod はトースト通知で、どのツールが足りないかを知らせます。サムネイルは引き続き表示されます。
-
-## インストール
-
-ターミナルで開いた Claude Code のセッションのプロンプトに、次を入力します。
-
-```
-/plugin install paste-preview --marketplace alan890104/claude-code-paste-preview
-```
-
-`y` と答えてマーケットプレイスを追加し、スコープを選びます（ユーザースコープなら、すべてのセッションで読み込まれます）。すぐに有効になり、再起動は不要です。
 
 ## 使い方
 

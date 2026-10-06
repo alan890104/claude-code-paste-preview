@@ -5,6 +5,16 @@
   <p><a href="README.md">English</a> | <a href="README.zh-TW.md">繁體中文</a> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.ja.md">日本語</a> | <strong>한국어</strong></p>
 </div>
 
+## 설치
+
+터미널에서 실행 중인 Claude Code 세션의 프롬프트에 입력합니다.
+
+```
+/plugin install paste-preview --marketplace alan890104/claude-code-paste-preview
+```
+
+마켓플레이스를 추가하려면 `y`로 답하고, scope를 선택합니다(user scope를 선택하면 모든 세션에서 로드됩니다). 바로 실행되며, 재시작은 필요 없습니다.
+
 https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 
 [Claude Code](https://claude.com/claude-code)용 mod로, 붙여넣은 이미지를 다룹니다. 터미널에서는 붙여넣은 이미지가 `[Image #1]`로만 표시되어서, 세 번쯤 붙여넣고 나면 어느 것이 어느 것인지 알 수 없게 됩니다. 이 mod를 설치하면 다음과 같이 됩니다.
@@ -27,16 +37,6 @@ https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 | Windows | Node.js 18 이상(`node.exe`가 `PATH`에 있어야 합니다). 편집기는 Microsoft Edge 앱 창으로 열리고(Edge가 없으면 Chrome), 그것도 없으면 기본 브라우저로 열립니다. | 필요 없음: 기본 제공되는 PowerShell을 사용합니다 |
 
 빠진 것이 있으면 mod가 토스트 알림으로 어떤 도구가 없는지 알려 주며, 썸네일은 그대로 표시됩니다.
-
-## 설치
-
-터미널에서 실행 중인 Claude Code 세션의 프롬프트에 입력합니다.
-
-```
-/plugin install paste-preview --marketplace alan890104/claude-code-paste-preview
-```
-
-마켓플레이스를 추가하려면 `y`로 답하고, scope를 선택합니다(user scope를 선택하면 모든 세션에서 로드됩니다). 바로 실행되며, 재시작은 필요 없습니다.
 
 ## 사용법
 

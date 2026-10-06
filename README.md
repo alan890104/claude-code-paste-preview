@@ -5,6 +5,16 @@
   <p><strong>English</strong> | <a href="README.zh-TW.md">繁體中文</a> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.ko.md">한국어</a></p>
 </div>
 
+## Install
+
+At the prompt of a Claude Code session in a terminal:
+
+```
+/plugin install paste-preview --marketplace alan890104/claude-code-paste-preview
+```
+
+Answer `y` to add the marketplace, then pick a scope (user scope loads it in every session). It runs at once, with no restart.
+
 https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 
 A [Claude Code](https://claude.com/claude-code) mod for the images you paste. In the terminal a pasted image is just `[Image #1]`, and three pastes later you can't tell which is which. With this mod:
@@ -27,16 +37,6 @@ A [Claude Code](https://claude.com/claude-code) mod for the images you paste. In
 | Windows | Node.js 18 or newer (`node.exe` on `PATH`). The editor opens as a Microsoft Edge app window (Chrome where Edge is missing), else in the default browser. | Nothing: PowerShell, built in |
 
 Where something is missing the mod says so in a toast: which tool, and the thumbnail still shows.
-
-## Install
-
-At the prompt of a Claude Code session in a terminal:
-
-```
-/plugin install paste-preview --marketplace alan890104/claude-code-paste-preview
-```
-
-Answer `y` to add the marketplace, then pick a scope (user scope loads it in every session). It runs at once, with no restart.
 
 ## Use
 

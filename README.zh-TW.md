@@ -5,6 +5,16 @@
   <p><a href="README.md">English</a> | <strong>繁體中文</strong> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.ja.md">日本語</a> | <a href="README.ko.md">한국어</a></p>
 </div>
 
+## 安裝
+
+在終端機裡 Claude Code session 的輸入框輸入：
+
+```
+/plugin install paste-preview --marketplace alan890104/claude-code-paste-preview
+```
+
+按 `y` 加入 marketplace，再選一個 scope（選 user scope 會在每個 session 載入）。安裝後立刻生效，不用重開。
+
 https://github.com/user-attachments/assets/d68fe9a9-9179-4e3e-868f-2049647287cb
 
 這是一個 [Claude Code](https://claude.com/claude-code) 的 mod，專門處理你貼上的圖片。在終端機裡，貼上的圖只會顯示成 `[Image #1]`，貼個三張之後，就分不出哪張是哪張了。裝了這個 mod 之後：
@@ -27,16 +37,6 @@ https://github.com/user-attachments/assets/d68fe9a9-9179-4e3e-868f-2049647287cb
 | Windows | Node.js 18 以上（`node.exe` 要在 `PATH` 裡）。編輯器用 Microsoft Edge 的 app 視窗開啟（沒有 Edge 時用 Chrome），再不然用預設瀏覽器。 | 不用另外裝：內建的 PowerShell 就夠了 |
 
 缺了什麼，mod 會用提示（toast）告訴你缺的是哪個工具，縮圖照樣會顯示。
-
-## 安裝
-
-在終端機裡 Claude Code session 的輸入框輸入：
-
-```
-/plugin install paste-preview --marketplace alan890104/claude-code-paste-preview
-```
-
-按 `y` 加入 marketplace，再選一個 scope（選 user scope 會在每個 session 載入）。安裝後立刻生效，不用重開。
 
 ## 使用
 

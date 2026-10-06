@@ -5,6 +5,16 @@
   <p><a href="README.md">English</a> | <a href="README.zh-TW.md">繁體中文</a> | <strong>简体中文</strong> | <a href="README.ja.md">日本語</a> | <a href="README.ko.md">한국어</a></p>
 </div>
 
+## 安装
+
+在终端里 Claude Code 会话的输入框中输入：
+
+```
+/plugin install paste-preview --marketplace alan890104/claude-code-paste-preview
+```
+
+按 `y` 添加 marketplace，再选一个 scope（选 user scope 会在每个会话里加载）。安装后立即生效，无需重启。
+
 https://github.com/user-attachments/assets/d68fe9a9-9179-4e3e-868f-2049647287cb
 
 这是一个 [Claude Code](https://claude.com/claude-code) 的 mod，专门处理你粘贴的图片。在终端里，粘贴的图片只会显示成 `[Image #1]`，粘贴三张之后，就分不清哪张是哪张了。装上这个 mod 之后：
@@ -27,16 +37,6 @@ https://github.com/user-attachments/assets/d68fe9a9-9179-4e3e-868f-2049647287cb
 | Windows | Node.js 18 或更高版本（`node.exe` 要在 `PATH` 里）。编辑器用 Microsoft Edge 的应用窗口打开（没有 Edge 时用 Chrome），再不然用默认浏览器。 | 不用另外装：系统自带的 PowerShell 就够了 |
 
 缺了什么，mod 会弹出提示（toast），告诉你缺的是哪个工具，缩略图照样会显示。
-
-## 安装
-
-在终端里 Claude Code 会话的输入框中输入：
-
-```
-/plugin install paste-preview --marketplace alan890104/claude-code-paste-preview
-```
-
-按 `y` 添加 marketplace，再选一个 scope（选 user scope 会在每个会话里加载）。安装后立即生效，无需重启。
 
 ## 使用
 
