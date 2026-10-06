@@ -22,6 +22,29 @@ test('with no image in the box the band is the engine’s own, on every surface'
   }
 })
 
+// #1 in the box, a 16:9 paste; its thumbnail, a 1×1 PNG, is all the band reads.
+const SHOT = { n: 1, file: '/p/1.png', thumb: '/p/1.thumb.png', gen: 0, width: 1600, height: 900, isEdited: false, ratio: 16 / 9 }
+const PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
+test('the thumbnail keeps its size however many lines the prompt holds', async ($, on) => {
+  const state: Record<string, unknown> = { shots: [SHOT], inBox: [1] }
+  on('state.get', ($, e) => ({ value: { value: state[e.key], version: 1 } }))
+  on('fs.read', () => ({ value: { base64: PIXEL } }))
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal', viewport: { columns: 105, rows: 46, isFullscreen: true } })
+  const size = { columns: 28, rows: 8 }
+  expect((await band.find({ type: 'Image' }))?.props).toMatchObject(size)
+  // In fullscreen each line typed takes a row from the band.
+  for (const maxRows of [12, 8, 4]) {
+    await band.redraw({ ...BAND.props, maxRows, scroll: { offset: 0, bodyRows: maxRows - 1 } })
+    expect((await band.find({ type: 'Image' }))?.props).toMatchObject(size)
+  }
+  await band.unmount()
+  // A short terminal draws it smaller from the start, a fifth of its rows.
+  const short = await $.ui.mount({ ...BAND, surface: 'terminal', viewport: { columns: 80, rows: 24, isFullscreen: true } })
+  expect((await short.find({ type: 'Image' }))?.props).toMatchObject({ columns: 14, rows: 4 })
+  await short.unmount()
+})
+
 import { dropOriginals, ratioOf } from './register'
 
 // A PNG header of the given size, as an image block carries it.

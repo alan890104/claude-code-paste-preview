@@ -28,6 +28,8 @@ const inBox = atom({ plugin: 'paste-preview', key: 'inBox' } as const, [])
 const PLACEHOLDER = /\[Image #(\d+)\]/g
 // A terminal cell is about twice as tall as it is wide.
 const CELL = 2
+// A thumbnail's height in rows, above the prompt as in the transcript.
+const ROWS = 8
 const THUMB_PX = '480'
 const EDITS_ROOT = '/private/tmp/paste-preview'
 const KEEP_DAYS = '+7'
@@ -198,16 +200,24 @@ const picture = async ($: EngineInterface, shot: Shot) => {
   return base64
 }
 
-// Every thumbnail the same height, side by side, as tall as the band allows up to 10 rows.
-const fit = (list: readonly Shot[], columns: number, maxRows: number) => {
+// Every thumbnail the same height, side by side: `tallest` rows, fewer only where they
+// would not fit across.
+const fit = (list: readonly Shot[], columns: number, tallest: number) => {
   const widthAt = (s: Shot, rows: number) => Math.max(4, Math.min(48, Math.round((rows * CELL * s.width) / s.height)))
-  let rows = Math.max(3, Math.min(10, maxRows - 2))
+  let rows = tallest
   while (rows > 3 && list.reduce((sum, s) => sum + widthAt(s, rows) + 2, 0) > columns) rows -= 1
   return list.map(s => {
     const width = widthAt(s, rows)
     return { columns: width, rows: Math.max(1, Math.min(rows, Math.round((width * s.height) / s.width / CELL))) }
   })
 }
+
+// The band's thumbnails are sized by the screen, never by the rows the band has left: in
+// fullscreen those are what the prompt leaves, so a thumbnail sized by them shrank with
+// every line typed. The bottom slot is half the screen, the prompt's included, so on a
+// short terminal a fifth of the screen leaves the prompt its room. A prompt longer than
+// the rest scrolls the band, as any tall band does: the picture is cut, never squeezed.
+const bandRows = (screenRows: number | undefined) => (screenRows === undefined ? ROWS : Math.max(3, Math.min(ROWS, Math.floor(screenRows / 5))))
 
 // Width over height of an image block, from its header: enough to tell one paste from
 // another when Claude Code has scaled it down or turned it into a JPEG.
@@ -297,7 +307,7 @@ export const register: Register = on => {
     if (drawn.length === 0) return next(e)
     const { Box, Text, Image } = $.ui.resolve(e)
     const columns = e.viewport?.columns ?? 80
-    const sizes = fit(drawn, columns - 4, 10)
+    const sizes = fit(drawn, columns - 4, ROWS)
     const pictures = await Promise.all(drawn.map(s => picture($, s).catch(() => undefined)))
     return (
       <Box flexDirection="column">
@@ -330,7 +340,7 @@ export const register: Register = on => {
     const { Box, Text, Button, Image } = $.ui.resolve(e)
     // A number whose copy is still being found shows as #N alone until it lands.
     const drawn = ns.flatMap(n => all.filter(s => s.n === n && s.thumb !== ''))
-    const sizes = fit(drawn, e.props.bodyColumns, e.props.maxRows)
+    const sizes = fit(drawn, e.props.bodyColumns, bandRows(e.viewport?.rows))
     const pictures = await Promise.all(drawn.map(s => picture($, s).catch(() => undefined)))
 
     return (

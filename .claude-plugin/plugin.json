@@ -1,6 +1,6 @@
 {
   "name": "paste-preview",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "See and mark up the images you paste into Claude Code: thumbnails above the prompt and in the transcript, and an editor that opens on paste",
   "author": { "name": "alan890104", "url": "https://github.com/alan890104" },
   "homepage": "https://github.com/alan890104/claude-code-paste-preview",
