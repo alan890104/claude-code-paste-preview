@@ -72,6 +72,7 @@ In a plain browser tab (the default browser on Linux or Windows, where no Chromi
 - On Linux and Windows the editor is a browser window, not a panel: over a full-screen terminal it may switch to another desktop, and the keys go back to the terminal only when the window closes (or when you click it).
 - Under WSL the mod runs as on Linux; the editor opens in a Linux browser when one is installed, else through `wslview` or Windows' `explorer.exe`.
 - Thumbnails in the transcript cover the current session. After a restart, older messages show `[Image #N]` as before.
+- Inside tmux or GNU screen there are no thumbnails: Claude Code draws no pictures there, so above the prompt and in the transcript each paste shows as `Image #N` with its Edit button, as in other terminals. The editor works as usual. For thumbnails, run Claude Code straight in Ghostty or kitty, outside tmux.
 - The editor's text tool uses the system input method. If typing Chinese or Japanese into the floating panel misbehaves, please open an issue.
 
 ## Development

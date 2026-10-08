@@ -72,6 +72,7 @@ https://github.com/user-attachments/assets/d68fe9a9-9179-4e3e-868f-2049647287cb
 - 在 Linux 和 Windows 上，编辑器是浏览器窗口，不是浮动面板：开在全屏的终端上方时，可能会切换到别的桌面，而且要等窗口关闭（或你点一下终端）之后，按键才会回到终端。
 - 在 WSL 下，mod 的行为和 Linux 相同；装有 Linux 浏览器时，编辑器用它打开，否则通过 `wslview` 或 Windows 的 `explorer.exe`。
 - 对话记录里的缩略图只覆盖当前会话。重启之后，较早的消息会像以前一样只显示 `[Image #N]`。
+- 在 tmux 或 GNU screen 里看不到缩略图：Claude Code 在这两者里不绘制图片，所以输入框上方和对话记录里只会显示 `Image #N` 和“编辑”按钮，和其他终端一样。编辑器照常工作。要看缩略图，请不经过 tmux，直接在 Ghostty 或 kitty 里运行 Claude Code。
 - 编辑器的文字工具使用系统输入法。如果在浮动面板里输入中文或日文时出现问题，请提交一个 issue。
 
 ## 开发
