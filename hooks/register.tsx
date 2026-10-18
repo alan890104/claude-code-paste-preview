@@ -364,6 +364,29 @@ const picture = async ($: EngineInterface, shot: Shot): Promise<ImageSource> => 
   return { png: base64 }
 }
 
+// The engine refuses a drawn tree past 2 MiB of Image source in all, and off macOS a
+// thumbnail is the paste itself, so three screenshots can pass it and take the whole band
+// (buttons too) away. Pictures are carried as bytes until this budget is spent; the rest
+// go by their file name, as a large one does.
+const TREE_BYTES = 1536 * 1024
+
+const picturesOf = async ($: EngineInterface, drawn: Shot[]): Promise<(ImageSource | undefined)[]> => {
+  let used = 0
+  const out: (ImageSource | undefined)[] = []
+  for (const shot of drawn) {
+    const source = await picture($, shot).catch(() => undefined)
+    if (source !== undefined && 'png' in source) {
+      if (used + source.png.length > TREE_BYTES) {
+        out.push({ file: shot.thumb, format: 'png', generation: shot.gen })
+        continue
+      }
+      used += source.png.length
+    }
+    out.push(source)
+  }
+  return out
+}
+
 // Every thumbnail the same height, side by side: `tallest` rows, fewer only where they
 // would not fit across.
 const fit = (list: readonly Shot[], columns: number, tallest: number) => {
@@ -462,7 +485,7 @@ export const register: Register = on => {
     const { Box, Text, Image } = $.ui.resolve(e)
     const columns = e.viewport?.columns ?? 80
     const sizes = fit(drawn, columns - 4, ROWS)
-    const pictures = await Promise.all(drawn.map(s => picture($, s).catch(() => undefined)))
+    const pictures = await picturesOf($, drawn)
     return (
       <Box flexDirection="column">
         <Box backgroundColor="userMessageBackground" paddingRight={1}>
@@ -495,7 +518,7 @@ export const register: Register = on => {
     // A number whose copy is still being found shows as #N alone until it lands.
     const drawn = ns.flatMap(n => all.filter(s => s.n === n && s.thumb !== ''))
     const sizes = fit(drawn, e.props.bodyColumns, bandRows(e.viewport?.rows))
-    const pictures = await Promise.all(drawn.map(s => picture($, s).catch(() => undefined)))
+    const pictures = await picturesOf($, drawn)
 
     return (
       <Box flexDirection="row" flexWrap="wrap" columnGap={2}>

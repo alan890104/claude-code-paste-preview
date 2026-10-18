@@ -87,3 +87,24 @@ test('a sent prompt whose pictures are unknown keeps Claude Code’s own row', a
   expect(await row.find({ type: 'Text', text: 'engine' })).toBeDefined()
   await row.unmount()
 })
+
+// Three pastes of about 1 MiB each: under the one-picture limit, past the engine's 2 MiB
+// of Image source per tree together. Off macOS a thumbnail is the paste itself, so the
+// band must still draw all three, their bytes within what the engine takes.
+test('three large pictures in the box still draw the band', async ($, on) => {
+  const shots = [1, 2, 3].map(n => ({ n, file: `/p/${n}.png`, thumb: `/p/${n}.png`, gen: 0, width: 1600, height: 900, isEdited: false, ratio: 16 / 9, isLarge: false }))
+  const state: Record<string, unknown> = { shots, inBox: [1, 2, 3] }
+  on('state.get', ($, e) => ({ value: { value: state[e.key], version: 1 } }))
+  // A PNG's first 33 bytes (signature and header), then zeros: about 1 MiB as base64.
+  const big = PIXEL.slice(0, 44) + 'A'.repeat(1_000_000 - 44)
+  on('fs.read', () => ({ value: { base64: big } }))
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal', viewport: { columns: 105, rows: 46, isFullscreen: true } })
+  const images = await band.findAll({ type: 'Image' })
+  expect(images.length).toBe(3)
+  const embedded = images.reduce((sum, image) => {
+    const source = image.props.source as { png?: string }
+    return sum + (source.png?.length ?? 0)
+  }, 0)
+  expect(embedded).toBeLessThanOrEqual(2 * 1024 * 1024)
+  await band.unmount()
+})
