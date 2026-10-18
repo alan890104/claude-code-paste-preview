@@ -92,7 +92,7 @@ test('a sent prompt whose pictures are unknown keeps Claude Code’s own row', a
 // of Image source per tree together. Off macOS a thumbnail is the paste itself, so the
 // band must still draw all three, their bytes within what the engine takes.
 test('three large pictures in the box still draw the band', async ($, on) => {
-  const shots = [1, 2, 3].map(n => ({ n, file: `C:/p/${n}.png`, thumb: `C:/p/${n}.png`, gen: 0, width: 1600, height: 900, isEdited: false, ratio: 16 / 9, isLarge: false }))
+  const shots = [1, 2, 3].map(n => ({ n, file: `/p/${n}.png`, thumb: `/p/${n}.png`, gen: 0, width: 1600, height: 900, isEdited: false, ratio: 16 / 9, isLarge: false }))
   const state: Record<string, unknown> = { shots, inBox: [1, 2, 3] }
   on('state.get', ($, e) => ({ value: { value: state[e.key], version: 1 } }))
   // A PNG's first 33 bytes (signature and header), then zeros: about 1 MiB as base64.
