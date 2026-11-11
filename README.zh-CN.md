@@ -20,6 +20,7 @@ https://github.com/user-attachments/assets/d68fe9a9-9179-4e3e-868f-2049647287cb
 这是一个 [Claude Code](https://claude.com/claude-code) 的 mod，专门处理你粘贴的图片。在终端里，粘贴的图片只会显示成 `[Image #1]`，粘贴三张之后，就分不清哪张是哪张了。装上这个 mod 之后：
 
 - **看得到粘贴了什么**：输入框里的每个 `[Image #N]` 都会在输入框上方显示缩略图；发送出去的消息在对话记录里也有缩略图，各自标着 `Image #N`。
+- **可以去掉一张**：缩略图角落的圆形 ✕ 会把它的 `[Image #N]` 从输入框删掉，Claude Code 就不会发送那张图。在不显示图片的终端，或插件读不了的图（JPEG）上，✕ 是名称旁边的按钮。
 - **发送前可以标注**：一粘贴，编辑器就自动弹出来，有画笔、圈、框、箭头、文字、裁剪、旋转、七种颜色和撤销。改完按 Enter，不想改就按 Esc，保留粘贴时的原图。
 - **Claude 收到的是标注后的图**：按 Enter 发送时，粘贴的原图会从消息里去掉，并告诉 Claude 去读改过的那张。
 - **macOS 上全屏也能用**：编辑器是原生的浮动面板，像 Spotlight 一样浮在全屏的终端上，不会切换 Space，关掉之后按键会回到输入框。面板平时在后台待命，所以一粘贴就立刻出现（待命时约占 100 MB 内存；闲置 20 分钟会自动退出，你一开始打字它就会重新待命）。Linux 和 Windows 上，编辑器是浏览器的应用窗口。
@@ -28,7 +29,7 @@ https://github.com/user-attachments/assets/d68fe9a9-9179-4e3e-868f-2049647287cb
 
 - macOS、Linux 或 Windows
 - Claude Code 2.1.291 或更高版本（mod 目前是抢先体验功能）
-- 要显示缩略图，终端需要支持 kitty 图形协议，例如 [Ghostty](https://ghostty.org) 或 [kitty](https://sw.kovidgoyal.net/kitty/)。其他终端（包括 Windows Terminal）会显示 `Image #N`，不显示图片，旁边附有“编辑”按钮。
+- 要显示缩略图，终端需要支持 kitty 图形协议，例如 [Ghostty](https://ghostty.org) 或 [kitty](https://sw.kovidgoyal.net/kitty/)。其他终端（包括 Windows Terminal）会显示 `Image #N`，不显示图片，旁边附有“编辑”和 ✕ 按钮。
 
 | | 编辑器 | 剪贴板，只在找不到 Claude Code 自己保存的那份粘贴图片时才会用到 |
 |---|---|---|
@@ -72,7 +73,7 @@ https://github.com/user-attachments/assets/d68fe9a9-9179-4e3e-868f-2049647287cb
 - 在 Linux 和 Windows 上，编辑器是浏览器窗口，不是浮动面板：开在全屏的终端上方时，可能会切换到别的桌面，而且要等窗口关闭（或你点一下终端）之后，按键才会回到终端。
 - 在 WSL 下，mod 的行为和 Linux 相同；装有 Linux 浏览器时，编辑器用它打开，否则通过 `wslview` 或 Windows 的 `explorer.exe`。
 - 对话记录里的缩略图只覆盖当前会话。重启之后，较早的消息会像以前一样只显示 `[Image #N]`。
-- 在 tmux 或 GNU screen 里看不到缩略图：Claude Code 在这两者里不绘制图片，所以输入框上方和对话记录里只会显示 `Image #N` 和“编辑”按钮，和其他终端一样。编辑器照常工作。要看缩略图，请不经过 tmux，直接在 Ghostty 或 kitty 里运行 Claude Code。
+- 在 tmux 或 GNU screen 里看不到缩略图：Claude Code 在这两者里不绘制图片，所以输入框上方和对话记录里只会显示 `Image #N` 和“编辑”、✕ 按钮，和其他终端一样。编辑器照常工作。要看缩略图，请不经过 tmux，直接在 Ghostty 或 kitty 里运行 Claude Code。
 - 编辑器的文字工具使用系统输入法。如果在浮动面板里输入中文或日文时出现问题，请提交一个 issue。
 
 ## 开发

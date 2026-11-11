@@ -20,6 +20,7 @@ https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 [Claude Code](https://claude.com/claude-code)용 mod로, 붙여넣은 이미지를 다룹니다. 터미널에서는 붙여넣은 이미지가 `[Image #1]`로만 표시되어서, 세 번쯤 붙여넣고 나면 어느 것이 어느 것인지 알 수 없게 됩니다. 이 mod를 설치하면 다음과 같이 됩니다.
 
 - **붙여넣은 이미지가 보입니다.** 입력창의 `[Image #N]`마다 입력창 위에 썸네일이 표시되고, 전송한 프롬프트도 대화 기록에 썸네일이 표시되며, 각각 `Image #N` 라벨이 붙습니다.
+- **한 장만 뺄 수 있습니다.** 썸네일 모서리의 둥근 ✕를 누르면 그 `[Image #N]`이 입력창에서 지워져 Claude Code가 그 이미지를 보내지 않습니다. 이미지를 그리지 않는 터미널이나 읽을 수 없는 이미지(JPEG)에서는 ✕가 이름 옆 버튼이 됩니다.
 - **전송하기 전에 이미지에 표시할 수 있습니다.** 붙여넣는 즉시 편집기가 열립니다. 펜, 타원, 사각형, 화살표, 텍스트, 자르기, 회전, 7가지 색, 실행 취소를 쓸 수 있습니다. 끝나면 Enter를 누르고, 붙여넣은 그대로 두려면 Esc를 누릅니다.
 - **Claude는 표시를 추가한 이미지를 받습니다.** Enter를 누르면 처음 붙여넣은 원본은 메시지에서 빠지고, Claude에게는 편집한 이미지의 위치가 전달됩니다.
 - **macOS에서는 전체 화면에서도 됩니다.** 편집기는 네이티브 플로팅 패널로, Spotlight처럼 전체 화면 터미널 위에 뜹니다. Space가 전환되지 않고, 패널을 닫으면 키 입력이 프롬프트로 돌아옵니다. 패널은 백그라운드에서 대기하고 있어서 붙여넣는 즉시 나타납니다(대기 중에는 약 100 MB를 사용하고, 20분 동안 쓰지 않으면 종료되며, 입력을 시작하면 다시 실행됩니다). Linux와 Windows에서는 브라우저 앱 창으로 열립니다.
@@ -28,7 +29,7 @@ https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 
 - macOS, Linux 또는 Windows
 - Claude Code 2.1.291 이상(mod는 얼리 액세스 기능입니다)
-- 썸네일을 보려면 [Ghostty](https://ghostty.org)나 [kitty](https://sw.kovidgoyal.net/kitty/)처럼 kitty 그래픽 프로토콜을 지원하는 터미널이 필요합니다. 그 밖의 터미널(Windows Terminal 포함)에서는 이미지 대신 `Image #N`과 "편집" 버튼이 표시됩니다.
+- 썸네일을 보려면 [Ghostty](https://ghostty.org)나 [kitty](https://sw.kovidgoyal.net/kitty/)처럼 kitty 그래픽 프로토콜을 지원하는 터미널이 필요합니다. 그 밖의 터미널(Windows Terminal 포함)에서는 이미지 대신 `Image #N`과 "편집"과 ✕ 버튼이 표시됩니다.
 
 | | 편집기 | 클립보드(Claude Code가 보관한 붙여넣기 사본을 찾을 수 없을 때만) |
 |---|---|---|
@@ -72,7 +73,7 @@ https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 - Linux와 Windows에서 편집기는 패널이 아니라 브라우저 창입니다. 전체 화면 터미널 위에서는 다른 데스크톱으로 전환될 수 있고, 키 입력은 창이 닫혀야(또는 터미널을 클릭해야) 터미널로 돌아옵니다.
 - WSL에서 mod는 Linux와 똑같이 동작합니다. 편집기는 Linux 브라우저가 설치되어 있으면 그것으로 열고, 없으면 `wslview` 또는 Windows의 `explorer.exe`를 통해 엽니다.
 - 대화 기록의 썸네일은 현재 세션에만 적용됩니다. 재시작하면 이전 메시지는 예전처럼 `[Image #N]`으로 표시됩니다.
-- tmux나 GNU screen 안에서는 썸네일이 표시되지 않습니다. Claude Code가 그 안에서는 이미지를 그리지 않기 때문에, 입력창 위와 대화 기록에는 다른 터미널과 마찬가지로 `Image #N`과 "편집" 버튼이 표시됩니다. 편집기는 평소대로 동작합니다. 썸네일을 보려면 tmux를 거치지 않고 Ghostty나 kitty에서 Claude Code를 직접 실행하세요.
+- tmux나 GNU screen 안에서는 썸네일이 표시되지 않습니다. Claude Code가 그 안에서는 이미지를 그리지 않기 때문에, 입력창 위와 대화 기록에는 다른 터미널과 마찬가지로 `Image #N`과 "편집"과 ✕ 버튼이 표시됩니다. 편집기는 평소대로 동작합니다. 썸네일을 보려면 tmux를 거치지 않고 Ghostty나 kitty에서 Claude Code를 직접 실행하세요.
 - 편집기의 텍스트 도구는 시스템 입력기를 사용합니다. 플로팅 패널에 중국어나 일본어를 입력할 때 문제가 있으면 issue를 열어 주시기 바랍니다.
 
 ## 개발

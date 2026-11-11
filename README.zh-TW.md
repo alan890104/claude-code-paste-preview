@@ -20,6 +20,7 @@ https://github.com/user-attachments/assets/d68fe9a9-9179-4e3e-868f-2049647287cb
 這是一個 [Claude Code](https://claude.com/claude-code) 的 mod，專門處理你貼上的圖片。在終端機裡，貼上的圖只會顯示成 `[Image #1]`，貼個三張之後，就分不出哪張是哪張了。裝了這個 mod 之後：
 
 - **看得到貼了什麼**：輸入框裡的每個 `[Image #N]` 都會在輸入框上方顯示縮圖；送出的訊息在對話紀錄裡也有縮圖，各自標上 `Image #N`。
+- **可以拿掉一張**：縮圖角落的圓形 ✕ 會把它的 `[Image #N]` 從輸入框刪掉，Claude Code 就不會送出那張圖。在不顯示圖片的終端機，或模組讀不了的圖（JPEG）上，✕ 是名稱旁的按鈕。
 - **送出前可以標註**：一貼上，編輯器就自動跳出來，有畫筆、圈、框、箭頭、文字、裁切、旋轉、七種顏色和復原。改完按 Enter，不想改就按 Esc，保留貼上的原圖。
 - **Claude 收到的是標註過的圖**：按 Enter 送出時，貼上的原圖會從訊息裡拿掉，並告訴 Claude 去讀改過的那張。
 - **macOS 上全螢幕也能用**：編輯器是原生的浮動面板，像 Spotlight 一樣浮在全螢幕的終端機上，不會切換 Space，關掉之後按鍵會回到輸入框。面板平常在背景待命，所以一貼上就立刻出現（待命時約佔 100 MB 記憶體；閒置 20 分鐘會自動結束，你一開始打字就會再啟動）。Linux 和 Windows 上，編輯器是瀏覽器的 app 視窗。
@@ -28,7 +29,7 @@ https://github.com/user-attachments/assets/d68fe9a9-9179-4e3e-868f-2049647287cb
 
 - macOS、Linux 或 Windows
 - Claude Code 2.1.291 以上（mod 目前是搶先體驗功能）
-- 要顯示縮圖，終端機需要支援 kitty 圖形協定，例如 [Ghostty](https://ghostty.org) 或 [kitty](https://sw.kovidgoyal.net/kitty/)。其他終端機（包括 Windows Terminal）會顯示 `Image #N`，不顯示圖片，旁邊附有「編輯」按鈕。
+- 要顯示縮圖，終端機需要支援 kitty 圖形協定，例如 [Ghostty](https://ghostty.org) 或 [kitty](https://sw.kovidgoyal.net/kitty/)。其他終端機（包括 Windows Terminal）會顯示 `Image #N`，不顯示圖片，旁邊附有「編輯」和 ✕ 按鈕。
 
 | | 編輯器 | 剪貼簿，只在找不到 Claude Code 自己存的那份貼上圖片時才會用到 |
 |---|---|---|
@@ -72,7 +73,7 @@ https://github.com/user-attachments/assets/d68fe9a9-9179-4e3e-868f-2049647287cb
 - 在 Linux 和 Windows 上，編輯器是瀏覽器視窗，不是浮動面板：開在全螢幕的終端機上方時，可能會切換到別的桌面，而且要等視窗關閉（或你點一下終端機）之後，按鍵才會回到終端機。
 - 在 WSL 下，mod 的行為和 Linux 相同；有安裝 Linux 的瀏覽器時，編輯器用它開啟，否則透過 `wslview` 或 Windows 的 `explorer.exe`。
 - 對話紀錄裡的縮圖只涵蓋目前這個 session。重新啟動之後，較早的訊息會像以前一樣只顯示 `[Image #N]`。
-- 在 tmux 或 GNU screen 裡看不到縮圖：Claude Code 在這兩者裡不畫圖片，所以輸入框上方和對話紀錄裡只會顯示 `Image #N` 和「編輯」按鈕，跟其他終端機一樣。編輯器照常運作。要看縮圖，請不經過 tmux，直接在 Ghostty 或 kitty 裡執行 Claude Code。
+- 在 tmux 或 GNU screen 裡看不到縮圖：Claude Code 在這兩者裡不畫圖片，所以輸入框上方和對話紀錄裡只會顯示 `Image #N` 和「編輯」、✕ 按鈕，跟其他終端機一樣。編輯器照常運作。要看縮圖，請不經過 tmux，直接在 Ghostty 或 kitty 裡執行 Claude Code。
 - 編輯器的文字工具使用系統輸入法。如果在浮動面板裡輸入中文或日文時出現問題，請開一個 issue。
 
 ## 開發

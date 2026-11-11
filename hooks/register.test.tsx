@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
 
 // prompt.edit is the engine's alone to raise, so the paste itself is checked in a
 // live session; these hold what the band and the send do around it.
@@ -46,6 +47,8 @@ test('the thumbnail keeps its size however many lines the prompt holds', async (
 })
 
 import { dropOriginals, ratioOf } from './register'
+import { decodePng } from './badge'
+import { fromBase64 } from './platform'
 
 // A PNG header of the given size, as an image block carries it.
 const png = (width: number, height: number) => {
@@ -106,5 +109,75 @@ test('three large pictures in the box still draw the band', async ($, on) => {
     return sum + (source.png?.length ?? 0)
   }, 0)
   expect(embedded).toBeLessThanOrEqual(2 * 1024 * 1024)
+  await band.unmount()
+})
+
+// The close badge: with the thumbnail's pixels read, the band draws the badge into the
+// picture and a Client over it; a click on the badge drops [Image #1] from the draft.
+// State the band reads and the removal writes, kept here with a version per key.
+const stateOf = (on: On, seed: Record<string, unknown>) => {
+  const state = { ...seed }
+  const versions: Record<string, number> = {}
+  on('state.get', ($, e) => ({ value: { value: state[e.key], version: versions[e.key] ?? 1 } }))
+  on('state.set', ($, e) => {
+    state[e.key] = e.value
+    versions[e.key] = (versions[e.key] ?? 1) + 1
+    return { value: { isSet: true as const, version: versions[e.key] ?? 1 } }
+  })
+  return state
+}
+
+const boxWith = (on: On, text: string) => {
+  const filled: { text: string; cursor?: number }[] = []
+  on('prompt.read', () => ({ value: { text, cursor: text.length } }))
+  on('prompt.fill', ($, e) => {
+    filled.push({ text: e.text, cursor: e.cursor })
+    return { isFilled: true }
+  })
+  return filled
+}
+
+test('a click on the close badge takes the picture out of the prompt', async ($, on) => {
+  const state = stateOf(on, { shots: [{ ...SHOT, isLarge: false }], inBox: [1] })
+  on('fs.read', () => ({ value: { base64: PIXEL } }))
+  on('env.get', ($, e) => ({ value: e.name === 'TERM_PROGRAM' ? 'ghostty' : undefined }))
+  const filled = boxWith(on, 'look at [Image #1] here')
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal', viewport: { columns: 105, rows: 46, isFullscreen: true } })
+  const image = await band.find({ type: 'Image' })
+  expect(image?.props).toMatchObject({ columns: 28, rows: 8 })
+  // A PNG of the cells' pixels, the badge drawn in.
+  const drawn = decodePng(fromBase64((image?.props.source as { png: string }).png))!
+  expect([drawn.width, drawn.height]).toEqual([280, 160])
+  expect(await band.find({ type: 'Client' })).toBeDefined()
+  expect(await band.find({ type: 'Button', key: 'remove-1' })).toBeUndefined()
+  // Elsewhere on the picture nothing happens.
+  await band.pointer({ type: 'up', x: 5, y: 4, button: 'left', in: 'close-1' })
+  expect(filled).toEqual([])
+  await band.pointer({ type: 'up', x: 26, y: 0, fine: { x: 26.5, y: 0.75 }, button: 'left', in: 'close-1' })
+  expect(filled).toEqual([{ text: 'look at here', cursor: 12 }])
+  expect(state.inBox).toEqual([])
+  await band.unmount()
+})
+
+test('a picture whose pixels cannot be read gets a ✕ button instead', async ($, on) => {
+  stateOf(on, { shots: [{ ...SHOT, isLarge: false }], inBox: [1] })
+  // A PNG's header alone: the terminal may draw it, the badge has nothing to go on.
+  on('fs.read', () => ({ value: { base64: PIXEL.slice(0, 44) } }))
+  const filled = boxWith(on, '[Image #1] look')
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal', viewport: { columns: 105, rows: 46, isFullscreen: true } })
+  expect(await band.find({ type: 'Client' })).toBeUndefined()
+  await band.press({ key: 'remove-1' })
+  expect(filled).toEqual([{ text: 'look', cursor: 4 }])
+  await band.unmount()
+})
+
+test('where the terminal draws no pictures the ✕ is a button, not a badge no one would see', async ($, on) => {
+  stateOf(on, { shots: [{ ...SHOT, isLarge: false }], inBox: [1] })
+  on('fs.read', () => ({ value: { base64: PIXEL } }))
+  on('env.get', ($, e) => ({ value: e.name === 'TERM_PROGRAM' ? 'Apple_Terminal' : undefined }))
+  boxWith(on, '[Image #1]')
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal', viewport: { columns: 105, rows: 46, isFullscreen: true } })
+  expect(await band.find({ type: 'Client' })).toBeUndefined()
+  expect(await band.find({ type: 'Button', key: 'remove-1' })).toBeDefined()
   await band.unmount()
 })

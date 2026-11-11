@@ -2,6 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ImageSource, Register } from 'claude-code'
 
 import type { Shot } from '../types'
+import { baseOf, decodePng, encodePng, toBase64, withBadge, withoutPlaceholder } from './badge'
+import type { Pixels } from './badge'
 import { clipboardSteps, editorArgv, editsRoot, engineRoot, fromBase64, headStep, isMissing, join, LANGUAGE_PS, langOf, localeOf, osOf, sizeOf, sweepStep, thumbOf } from './platform'
 import type { Env, Lang, Os, Step } from './platform'
 
@@ -77,6 +79,11 @@ let isTicking = false
 let isClipboardToldOff = false
 const capturing = new Set<number>()
 const thumbs = new Map<string, string>()
+// Each thumbnail's pixels, read once per version, and the badged copies made from them
+// per size; the oldest go first past a handful, as a session's pastes come and go.
+const pixels = new Map<string, Pixels | null>()
+const badged = new WeakMap<Pixels, Map<string, string>>()
+const KEPT = 24
 
 // The images a text holds, in order.
 const numbersIn = (text: string) => [...new Set([...text.matchAll(PLACEHOLDER)].map(m => Number(m[1])))]
@@ -229,6 +236,11 @@ const look = async ($: EngineInterface, n: number, file: string, small?: string)
 
 const refresh = async ($: EngineInterface, n: number, file: string, isEdited: boolean, small?: string) => {
   const seen = file === '' ? undefined : await look($, n, file, small).catch(() => undefined)
+  // Read before the band redraws, so the picture comes with its close badge at once.
+  if (seen !== undefined && seen.thumb !== '') {
+    const gen = ((await read($, shots)).find(s => s.n === n)?.gen ?? -1) + 1
+    await pixelsOf($, seen.thumb, gen)
+  }
   await update($, shots, list => {
     const was = list.find(s => s.n === n)
     const gen = (was?.gen ?? -1) + 1
@@ -387,6 +399,76 @@ const picturesOf = async ($: EngineInterface, drawn: Shot[]): Promise<(ImageSour
   return out
 }
 
+// A thumbnail's pixels, at most 480 px on a side, or null for one this cannot read
+// (past what $.fs.read hands over, or a PNG kind it does not decode).
+const pixelsOf = async ($: EngineInterface, thumb: string, gen: number) => {
+  const at = `${thumb}:${gen}`
+  if (pixels.has(at)) return pixels.get(at) ?? null
+  const read = await $.fs.read(thumb, { as: 'bytes' }).catch(() => undefined)
+  const decoded = read === undefined ? undefined : (() => { try { return decodePng(fromBase64(read.base64)) } catch { return undefined } })()
+  const kept = decoded === undefined ? null : baseOf(decoded)
+  pixels.set(at, kept)
+  if (pixels.size > KEPT) pixels.delete(pixels.keys().next().value!)
+  return kept
+}
+
+// The band's pictures: each with its close badge drawn in where its pixels could be read
+// and the budget allows, else as `picturesOf` draws it,
+// and the band gives that one a ✕ button instead.
+const bandPicturesOf = async ($: EngineInterface, drawn: Shot[], sizes: { columns: number; rows: number }[], canBadge: boolean) => {
+  let used = 0
+  const out: { source: ImageSource | undefined; hasBadge: boolean }[] = []
+  for (const [i, shot] of drawn.entries()) {
+    const size = sizes[i]!
+    const base = canBadge ? await pixelsOf($, shot.thumb, shot.gen) : null
+    if (base !== null) {
+      const made = badged.get(base) ?? new Map<string, string>()
+      badged.set(base, made)
+      const at = `${size.columns}x${size.rows}`
+      const png = made.get(at) ?? toBase64(encodePng(withBadge(base, size.columns, size.rows)))
+      made.set(at, png)
+      if (used + png.length <= TREE_BYTES) {
+        used += png.length
+        out.push({ source: { png }, hasBadge: true })
+        continue
+      }
+    }
+    const source = await picture($, shot).catch(() => undefined)
+    if (source !== undefined && 'png' in source) {
+      if (used + source.png.length > TREE_BYTES) {
+        out.push({ source: { file: shot.thumb, format: 'png', generation: shot.gen }, hasBadge: false })
+        continue
+      }
+      used += source.png.length
+    }
+    out.push({ source, hasBadge: false })
+  }
+  return out
+}
+
+// Whether this terminal draws pictures, where the engine says it does: kitty, Ghostty,
+// iTerm2 under fullscreen rendering, or wherever pictures are forced on. Elsewhere a
+// badge drawn into one would not be seen, so the ✕ is a button.
+let terminalEnv: Promise<{ forced?: string; program?: string; term?: string; kitty?: string }> | undefined
+const drawsPictures = async ($: EngineInterface, isFullscreen: boolean | undefined) => {
+  terminalEnv ??= Promise.all([$.env.get('CLAUDE_CODE_FORCE_TERMINAL_IMAGES'), $.env.get('TERM_PROGRAM'), $.env.get('TERM'), $.env.get('KITTY_WINDOW_ID')])
+    .then(([forced, program, term, kitty]) => ({ forced, program, term, kitty }))
+  const { forced, program, term, kitty } = await terminalEnv.catch(() => ({}) as { forced?: string; program?: string; term?: string; kitty?: string })
+  if (forced !== undefined && forced !== '' && forced !== '0') return true
+  // Inside tmux or screen the engine draws none, whatever terminal is outside.
+  if (program === 'tmux' || term?.startsWith('tmux') === true || term?.startsWith('screen') === true) return false
+  return program === 'ghostty' || term === 'xterm-kitty' || term === 'xterm-ghostty' || kitty !== undefined || (program === 'iTerm.app' && isFullscreen === true)
+}
+
+// Drops [Image #N] from the draft, so Claude Code no longer sends that picture.
+const remove = async ($: EngineInterface, n: number) => {
+  const box = await $.prompt.read()
+  const next = withoutPlaceholder(box.text, box.cursor, n)
+  if (next.text === box.text) return
+  const { isFilled } = await $.prompt.fill({ text: next.text, mode: 'replace', cursor: next.cursor })
+  if (isFilled) await update($, inBox, ns => ns.filter(m => m !== n))
+}
+
 // Every thumbnail the same height, side by side: `tallest` rows, fewer only where they
 // would not fit across.
 const fit = (list: readonly Shot[], columns: number, tallest: number) => {
@@ -509,33 +591,48 @@ export const register: Register = on => {
     )
   })
 
+  // A click on a thumbnail's close badge (./click.tsx).
+  on('ui.message', async ($, e, next) => {
+    const data = e.data as { n?: unknown; action?: unknown }
+    if (e.module.endsWith('click.tsx') && data?.action === 'remove' && typeof data.n === 'number') await remove($, data.n)
+    return next(e)
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.surface !== 'terminal' || e.props.hasSurvey) return next(e)
     const ns = await read($, inBox)
     if (ns.length === 0) return next(e)
     const all = await read($, shots)
-    const { Box, Text, Button, Image } = $.ui.resolve(e)
+    const { Box, Text, Button, Image, Client } = $.ui.resolve(e)
     // A number whose copy is still being found shows as #N alone until it lands.
     const drawn = ns.flatMap(n => all.filter(s => s.n === n && s.thumb !== ''))
     const sizes = fit(drawn, e.props.bodyColumns, bandRows(e.viewport?.rows))
-    const pictures = await picturesOf($, drawn)
+    const pictures = await bandPicturesOf($, drawn, sizes, await drawsPictures($, e.viewport?.isFullscreen))
 
     return (
       <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
         {ns.map((n, i) => {
           const shot = all.find(s => s.n === n)
           const at = shot === undefined ? -1 : drawn.indexOf(shot)
-          const source = pictures[at]
+          const { source, hasBadge = false } = pictures[at] ?? {}
           const size = sizes[at]
           const hotkey = i < 9 ? { hotkey: String(i + 1) } : {}
+          const image = source !== undefined && size !== undefined && <Image key={`img-${n}`} source={source} columns={size.columns} rows={size.rows} alt={`#${n}`} />
           return (
             <Box key={`shot-${n}`} flexDirection="column">
-              {source !== undefined && size !== undefined && (
-                <Image key={`img-${n}`} source={source} columns={size.columns} rows={size.rows} alt={`#${n}`} />
-              )}
+              {hasBadge && size !== undefined ? (
+                // The badge is in the picture; a Client over it tells a click on the badge.
+                <Box position="relative" width={size.columns} height={size.rows}>
+                  {image}
+                  <Box position="absolute" top={0} left={0} width={size.columns} height={size.rows}>
+                    <Client key={`close-${n}`} module="./click.tsx" props={{ n, columns: size.columns, rows: size.rows }} width={size.columns} height={size.rows} />
+                  </Box>
+                </Box>
+              ) : image}
               <Box flexDirection="row" columnGap={1}>
                 <Text key={`name-${n}`} dimColor>Image #{n}{shot?.isEdited ? ` ${WORDS[lang].edited}` : ''}</Text>
                 {shot !== undefined && shot.file !== '' && <Button key={`edit-${n}`} label={WORDS[lang].edit} plain {...hotkey} onPress={() => enqueue($, n)} />}
+                {!hasBadge && <Button key={`remove-${n}`} label="✕" plain onPress={() => void remove($, n)} />}
               </Box>
             </Box>
           )
