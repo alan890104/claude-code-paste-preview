@@ -2,7 +2,7 @@
 // corner, drawn into the picture's own pixels so it is round on every terminal (a glyph
 // would be a cell, square). No system tool reads a PNG's pixels on Linux and Windows,
 // and a mod has no zlib, so the PNG is read here: inflate, unfilter, then scaled to the
-// cells the band gives it. What the band draws is then raw RGBA, which an Image takes.
+// cells the band gives it, and written back as a PNG for the Image.
 
 // The pixels behind one terminal cell, twice as tall as wide like the cell itself, so a
 // circle in these pixels is a circle on screen.
@@ -322,6 +322,140 @@ export const withBadge = (base: Pixels, columns: number, rows: number): Pixels =
       const cross = Math.min(distanceToSegment(px, py, cx - arm, cy - arm, cx + arm, cy + arm), distanceToSegment(px, py, cx - arm, cy + arm, cx + arm, cy - arm))
       blend(out.rgba, o, [255, 255, 255], Math.max(0, Math.min(1, stroke + 0.5 - cross)))
     }
+  }
+  return out
+}
+
+const CRC = Array.from({ length: 256 }, (_, n) => {
+  let c = n
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+  return c >>> 0
+})
+
+// A zlib stream of `data`, deflated with the fixed Huffman codes and matches found by a
+// hash of the next three bytes: far from zlib's best, but a PNG of a screenshot comes out
+// a few times smaller than stored, which is what the band's byte budget needs.
+export const deflate = (data: Uint8Array): Uint8Array => {
+  const out: number[] = [0x78, 0x01]
+  let bits = 0
+  let count = 0
+  const put = (value: number, length: number) => {
+    bits |= value << count
+    count += length
+    while (count >= 8) {
+      out.push(bits & 255)
+      bits >>>= 8
+      count -= 8
+    }
+  }
+  // A Huffman code goes most significant bit first.
+  const code = (value: number, length: number) => {
+    let reversed = 0
+    for (let i = 0; i < length; i++) reversed |= ((value >> i) & 1) << (length - 1 - i)
+    put(reversed, length)
+  }
+  const literal = (s: number) => (s < 144 ? code(0x30 + s, 8) : s < 256 ? code(0x190 + s - 144, 9) : s < 280 ? code(s - 256, 7) : code(0xc0 + s - 280, 8))
+  put(1, 1)
+  put(1, 2)
+  const head = new Int32Array(1 << 15).fill(-1)
+  const previous = new Int32Array(data.length)
+  const hash = (i: number) => ((data[i]! << 10) ^ (data[i + 1]! << 5) ^ data[i + 2]!) & 0x7fff
+  const insert = (i: number) => {
+    if (i + 2 >= data.length) return
+    const h = hash(i)
+    previous[i] = head[h]!
+    head[h] = i
+  }
+  for (let i = 0; i < data.length; ) {
+    let bestLength = 0
+    let bestDistance = 0
+    if (i + 2 < data.length) {
+      for (let candidate = head[hash(i)]!, tries = 0; candidate >= 0 && i - candidate <= 32768 && tries < 16; candidate = previous[candidate]!, tries++) {
+        let length = 0
+        while (length < 258 && i + length < data.length && data[candidate + length] === data[i + length]) length++
+        if (length > bestLength) {
+          bestLength = length
+          bestDistance = i - candidate
+          if (length === 258) break
+        }
+      }
+    }
+    if (bestLength >= 3) {
+      let s = 0
+      while (s < 28 && LENGTH_BASE[s + 1]! <= bestLength) s++
+      literal(257 + s)
+      put(bestLength - LENGTH_BASE[s]!, LENGTH_EXTRA[s]!)
+      let d = 0
+      while (d < 29 && DISTANCE_BASE[d + 1]! <= bestDistance) d++
+      code(d, 5)
+      put(bestDistance - DISTANCE_BASE[d]!, DISTANCE_EXTRA[d]!)
+      for (let k = 0; k < bestLength; k++) insert(i + k)
+      i += bestLength
+    } else {
+      literal(data[i]!)
+      insert(i)
+      i += 1
+    }
+  }
+  literal(256)
+  if (count > 0) out.push(bits & 255)
+  let a = 1
+  let b = 0
+  for (let i = 0; i < data.length; i++) {
+    a = (a + data[i]!) % 65521
+    b = (b + a) % 65521
+  }
+  const sum = ((b << 16) | a) >>> 0
+  out.push(sum >>> 24, (sum >>> 16) & 255, (sum >>> 8) & 255, sum & 255)
+  return Uint8Array.from(out)
+}
+
+// Pixels as a PNG, which every terminal that draws pictures reads (some draw no raw
+// RGBA). Each row takes the filter whose bytes come out smallest, as libpng picks.
+export const encodePng = ({ width, height, rgba }: Pixels): Uint8Array => {
+  const row = width * 4
+  const raw = new Uint8Array((row + 1) * height)
+  const trial = new Uint8Array(row)
+  for (let y = 0; y < height; y++) {
+    const at = y * row
+    let best = Infinity
+    for (let filter = 0; filter < 5; filter++) {
+      let cost = 0
+      for (let x = 0; x < row; x++) {
+        const a = x >= 4 ? rgba[at + x - 4]! : 0
+        const b = y > 0 ? rgba[at - row + x]! : 0
+        const c = x >= 4 && y > 0 ? rgba[at - row + x - 4]! : 0
+        const p = a + b - c
+        const predicted = filter === 1 ? a : filter === 2 ? b : filter === 3 ? (a + b) >> 1 : filter === 4 ? (Math.abs(p - a) <= Math.abs(p - b) && Math.abs(p - a) <= Math.abs(p - c) ? a : Math.abs(p - b) <= Math.abs(p - c) ? b : c) : 0
+        const value = (rgba[at + x]! - predicted) & 255
+        trial[x] = value
+        cost += value < 128 ? value : 256 - value
+      }
+      if (cost < best) {
+        best = cost
+        raw[y * (row + 1)] = filter
+        raw.set(trial, y * (row + 1) + 1)
+      }
+    }
+  }
+  const zlib = deflate(raw)
+  const header = new Uint8Array(13)
+  new DataView(header.buffer).setUint32(0, width)
+  new DataView(header.buffer).setUint32(4, height)
+  header.set([8, 6, 0, 0, 0], 8)
+  const chunks = [['IHDR', header], ['IDAT', zlib], ['IEND', new Uint8Array(0)]] as const
+  const out = new Uint8Array(8 + chunks.reduce((sum, [, data]) => sum + 12 + data.length, 0))
+  out.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  const view = new DataView(out.buffer)
+  let to = 8
+  for (const [type, data] of chunks) {
+    view.setUint32(to, data.length)
+    for (let i = 0; i < 4; i++) out[to + 4 + i] = type.charCodeAt(i)
+    out.set(data, to + 8)
+    let c = 0xffffffff
+    for (let i = to + 4; i < to + 8 + data.length; i++) c = CRC[(c ^ out[i]!) & 255]! ^ (c >>> 8)
+    view.setUint32(to + 8 + data.length, (c ^ 0xffffffff) >>> 0)
+    to += 12 + data.length
   }
   return out
 }

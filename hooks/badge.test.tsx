@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { badgeAt, decodePng, isOnBadge, withBadge, withoutPlaceholder } from './badge'
+import { badgeAt, decodePng, deflate, encodePng, inflate, isOnBadge, withBadge, withoutPlaceholder } from './badge'
 import { fromBase64 } from './platform'
 
 // 24 by 12, made with Pillow: RGB, each pixel (x * 10, y * 20, x * y * 7) mod 256, and
@@ -34,6 +34,8 @@ test('the badge is drawn in the top right corner, round, and a click there is on
   expect(Math.max(...pixelAt(out, Math.floor(x - radius / 2), Math.floor(y)).slice(0, 3))).toBeLessThan(60)
   expect(Math.min(...pixelAt(out, Math.floor(x), Math.floor(y)).slice(0, 3))).toBeGreaterThan(200)
   // In cells: 26.5 columns across and under one row down.
+  // Written as a PNG and read back, every pixel the same.
+  expect(decodePng(encodePng(out))!.rgba).toEqual(out.rgba)
   expect(isOnBadge(26.5, 0.75, 28, 8)).toBe(true)
   expect(isOnBadge(24, 0.75, 28, 8)).toBe(false)
   expect(isOnBadge(26.5, 2, 28, 8)).toBe(false)
@@ -49,4 +51,18 @@ test('a placeholder leaves with one space beside it, the caret where it was', as
   expect(withoutPlaceholder('a [Image #1] b', 1, 1)).toEqual({ text: 'a b', cursor: 1 })
   // #1 is not #10.
   expect(withoutPlaceholder('[Image #10]', 0, 1)).toEqual({ text: '[Image #10]', cursor: 0 })
+})
+
+test('what deflate writes, inflate reads back, and smaller where it repeats', async () => {
+  const data = new Uint8Array(100_000).map((_, i) => (i % 700 < 350 ? 40 : (i * 31) % 256))
+  const packed = deflate(data)
+  expect(packed.length).toBeLessThan(data.length / 4)
+  const back = new Uint8Array(data.length)
+  expect(inflate(packed, back)).toBe(data.length)
+  expect(back).toEqual(data)
+  // Nothing to repeat: still read back whole.
+  const noise = new Uint8Array(5000).map((_, i) => (i * 2654435761) >>> 24)
+  const out = new Uint8Array(noise.length)
+  expect(inflate(deflate(noise), out)).toBe(noise.length)
+  expect(out).toEqual(noise)
 })

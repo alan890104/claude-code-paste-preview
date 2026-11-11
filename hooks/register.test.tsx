@@ -47,6 +47,8 @@ test('the thumbnail keeps its size however many lines the prompt holds', async (
 })
 
 import { dropOriginals, ratioOf } from './register'
+import { decodePng } from './badge'
+import { fromBase64 } from './platform'
 
 // A PNG header of the given size, as an image block carries it.
 const png = (width: number, height: number) => {
@@ -142,7 +144,10 @@ test('a click on the close badge takes the picture out of the prompt', async ($,
   const filled = boxWith(on, 'look at [Image #1] here')
   const band = await $.ui.mount({ ...BAND, surface: 'terminal', viewport: { columns: 105, rows: 46, isFullscreen: true } })
   const image = await band.find({ type: 'Image' })
-  expect(image?.props).toMatchObject({ columns: 28, rows: 8, source: { width: 280, height: 160 } })
+  expect(image?.props).toMatchObject({ columns: 28, rows: 8 })
+  // A PNG of the cells' pixels, the badge drawn in.
+  const drawn = decodePng(fromBase64((image?.props.source as { png: string }).png))!
+  expect([drawn.width, drawn.height]).toEqual([280, 160])
   expect(await band.find({ type: 'Client' })).toBeDefined()
   expect(await band.find({ type: 'Button', key: 'remove-1' })).toBeUndefined()
   // Elsewhere on the picture nothing happens.

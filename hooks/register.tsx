@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ImageSource, Register } from 'claude-code'
 
 import type { Shot } from '../types'
-import { baseOf, CELL_PX, decodePng, toBase64, withBadge, withoutPlaceholder } from './badge'
+import { baseOf, decodePng, encodePng, toBase64, withBadge, withoutPlaceholder } from './badge'
 import type { Pixels } from './badge'
 import { clipboardSteps, editorArgv, editsRoot, engineRoot, fromBase64, headStep, isMissing, join, LANGUAGE_PS, langOf, localeOf, osOf, sizeOf, sweepStep, thumbOf } from './platform'
 import type { Env, Lang, Os, Step } from './platform'
@@ -413,7 +413,7 @@ const pixelsOf = async ($: EngineInterface, thumb: string, gen: number) => {
 }
 
 // The band's pictures: each with its close badge drawn in where its pixels could be read
-// and the budget allows (raw pixels weigh more than a PNG), else as `picturesOf` draws it,
+// and the budget allows, else as `picturesOf` draws it,
 // and the band gives that one a ✕ button instead.
 const bandPicturesOf = async ($: EngineInterface, drawn: Shot[], sizes: { columns: number; rows: number }[], canBadge: boolean) => {
   let used = 0
@@ -425,11 +425,11 @@ const bandPicturesOf = async ($: EngineInterface, drawn: Shot[], sizes: { column
       const made = badged.get(base) ?? new Map<string, string>()
       badged.set(base, made)
       const at = `${size.columns}x${size.rows}`
-      const rgba = made.get(at) ?? toBase64(withBadge(base, size.columns, size.rows).rgba)
-      made.set(at, rgba)
-      if (used + rgba.length <= TREE_BYTES) {
-        used += rgba.length
-        out.push({ source: { rgba, width: size.columns * CELL_PX.width, height: size.rows * CELL_PX.height }, hasBadge: true })
+      const png = made.get(at) ?? toBase64(encodePng(withBadge(base, size.columns, size.rows)))
+      made.set(at, png)
+      if (used + png.length <= TREE_BYTES) {
+        used += png.length
+        out.push({ source: { png }, hasBadge: true })
         continue
       }
     }
