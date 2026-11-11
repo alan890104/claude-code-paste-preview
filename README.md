@@ -20,6 +20,7 @@ https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 A [Claude Code](https://claude.com/claude-code) mod for the images you paste. In the terminal a pasted image is just `[Image #1]`, and three pastes later you can't tell which is which. With this mod:
 
 - **You see what you pasted.** Every `[Image #N]` in the prompt box shows as a thumbnail above the prompt, and sent prompts show theirs in the transcript, each labelled `Image #N`.
+- **You can take one out.** The round ✕ in a thumbnail's corner drops its `[Image #N]` from the prompt, so Claude Code no longer sends that picture. In a terminal that draws no pictures, or for one the mod can't read (a JPEG), the ✕ is a button beside its name.
 - **You can mark it up before sending.** An editor opens the moment you paste: pen, ellipse, box, arrow, text, crop, rotate, seven colours, undo. Press Enter when done, or Esc to keep the picture as pasted.
 - **Claude gets the marked-up version.** At Enter the original paste is left out of the message and Claude is pointed at the edited picture.
 - **Full screen works on macOS.** There the editor is a native floating panel that sits over a full-screen terminal the way Spotlight does: no Space switch, and the keys return to the prompt when it closes. It waits ready in the background, so it appears the instant you paste (about 100 MB while it waits; after 20 minutes unused it quits, and comes back as you type). On Linux and Windows it opens as a browser app window.
@@ -28,7 +29,7 @@ A [Claude Code](https://claude.com/claude-code) mod for the images you paste. In
 
 - macOS, Linux or Windows
 - Claude Code 2.1.291 or newer (mods are an early-access feature)
-- For thumbnails, a terminal with the kitty graphics protocol, such as [Ghostty](https://ghostty.org) or [kitty](https://sw.kovidgoyal.net/kitty/). Other terminals (Windows Terminal among them) show `Image #N` in place of the picture, with its Edit button.
+- For thumbnails, a terminal with the kitty graphics protocol, such as [Ghostty](https://ghostty.org) or [kitty](https://sw.kovidgoyal.net/kitty/). Other terminals (Windows Terminal among them) show `Image #N` in place of the picture, with its Edit and ✕ buttons.
 
 | | The editor | The clipboard, only when Claude Code's own copy of a paste can't be found |
 |---|---|---|
@@ -72,7 +73,7 @@ In a plain browser tab (the default browser on Linux or Windows, where no Chromi
 - On Linux and Windows the editor is a browser window, not a panel: over a full-screen terminal it may switch to another desktop, and the keys go back to the terminal only when the window closes (or when you click it).
 - Under WSL the mod runs as on Linux; the editor opens in a Linux browser when one is installed, else through `wslview` or Windows' `explorer.exe`.
 - Thumbnails in the transcript cover the current session. After a restart, older messages show `[Image #N]` as before.
-- Inside tmux or GNU screen there are no thumbnails: Claude Code draws no pictures there, so above the prompt and in the transcript each paste shows as `Image #N` with its Edit button, as in other terminals. The editor works as usual. For thumbnails, run Claude Code straight in Ghostty or kitty, outside tmux.
+- Inside tmux or GNU screen there are no thumbnails: Claude Code draws no pictures there, so above the prompt and in the transcript each paste shows as `Image #N` with its Edit and ✕ buttons, as in other terminals. The editor works as usual. For thumbnails, run Claude Code straight in Ghostty or kitty, outside tmux.
 - The editor's text tool uses the system input method. If typing Chinese or Japanese into the floating panel misbehaves, please open an issue.
 
 ## Development
