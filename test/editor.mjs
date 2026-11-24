@@ -39,7 +39,8 @@ const browser = await chromium.launch({ headless: true, ...(process.env.E2E_BROW
 // collected and what each still holds can be read; the host's messages are recorded.
 // `bitmaps`: 'yes', 'no' (Safari before 15), or 'plain' (one that takes no options).
 // `fetches`: false where the page's fetch of its picture fails (a custom URL scheme
-// might). A picture named slow-… comes after a second.
+// might), 'not slow' where only a slow picture's does. A picture named slow-… comes after
+// a second.
 const panel = async ({ bitmaps = 'yes', fetches = true } = {}) => {
   const page = await browser.newPage({ viewport: { width: 1400, height: 950 } })
   // Each slow picture served, for a test to wait on rather than on a clock.
@@ -77,8 +78,8 @@ const panel = async ({ bitmaps = 'yes', fetches = true } = {}) => {
   await page.route('**/*', async route => {
     const url = new URL(route.request().url())
     if (url.pathname !== '/image') return route.fulfill({ body: PAGE, contentType: 'text/html' })
-    if (!fetches && route.request().resourceType() === 'fetch') return route.abort()
     const name = url.searchParams.get('id')?.replace(/-\d+$/, '') ?? 'small'
+    if ((fetches === false || (fetches === 'not slow' && name === 'slow')) && route.request().resourceType() === 'fetch') return route.abort()
     if (name !== 'slow') return route.fulfill({ body: pictures[name], contentType: 'image/png' })
     await new Promise(resolve => setTimeout(resolve, 1000))
     await route.fulfill({ body: pictures[name], contentType: 'image/png' })
@@ -412,6 +413,66 @@ try {
     for (let i = 0; i < 31; i++) await stroke(page, 0.05 + i * 0.03)
     for (let i = 0; i < 30; i++) await undo(page)
     check((await done(page)) !== undefined, 'so does Done after thirty undos of thirty-one strokes on a small picture')
+    await page.close()
+  }
+  // The next picture starts with nothing let go: Done with nothing drawn keeps its paste.
+  {
+    const { page } = await panel()
+    await open(page, 'small-1')
+    for (let i = 0; i < 31; i++) await stroke(page, 0.05 + i * 0.03)
+    await done(page)
+    await page.evaluate(() => window.closePicture())
+    await open(page, 'small-2')
+    await page.evaluate(() => { window.saved = undefined })
+    check((await done(page)) === undefined, 'after a picture whose undo let steps go, the next one with nothing drawn keeps its paste')
+    await page.close()
+  }
+
+  // Where pictures open through the <img> (Safari before 15), a late one is dropped too.
+  {
+    const { page } = await panel({ bitmaps: 'no' })
+    await page.evaluate(() => {
+      window.said = []
+      window.openPicture('slow-1', 'Image #1')
+      window.openPicture('tall-1', 'Image #2')
+    })
+    await waitUntil(() => page.served.includes('slow-1'))
+    await page.waitForTimeout(500)
+    const size = await view(page)
+    check(size.width === 360 && size.height === 600 && (await page.evaluate(() => window.said.filter(k => k === 'size').length)) === 1, `through the <img> too, a paste opened while the last one loads shows the new one (${size.width}×${size.height})`)
+    await page.close()
+  }
+
+  // Strokes made before the picture landed (on the last picture, still shown) are not the
+  // new picture's: when it lands, it starts clean.
+  {
+    const { page } = await panel()
+    await open(page, 'small-1')
+    await page.evaluate(() => {
+      window.said = []
+      window.openPicture('slow-1', 'Image #2')
+    })
+    await stroke(page, 0.5)
+    await waitUntil(() => page.served.includes('slow-1'))
+    await page.waitForFunction(() => window.said.includes('size'))
+    await page.evaluate(() => { window.saved = undefined })
+    check((await done(page)) === undefined, 'a stroke made before the picture landed is not kept: Done keeps the paste')
+    await page.close()
+  }
+  // A picture opened through the <img> (its fetch failed) that lands after the next one
+  // opened the usual way is dropped.
+  {
+    const { page } = await panel({ fetches: 'not slow' })
+    await page.evaluate(() => {
+      window.said = []
+      window.openPicture('slow-1', 'Image #1')
+    })
+    await page.waitForTimeout(200)
+    await page.evaluate(() => window.openPicture('tall-1', 'Image #2'))
+    await waitUntil(() => page.served.includes('slow-1'))
+    await page.waitForTimeout(500)
+    const size = await view(page)
+    check(size.width === 360 && size.height === 600 && (await page.evaluate(() => window.said.filter(k => k === 'size').length)) === 1, `an <img> picture landing after the next one opened is dropped (${size.width}×${size.height})`)
     await page.close()
   }
 } catch (error) {

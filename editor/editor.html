@@ -723,6 +723,10 @@ const load = async url => {
 }
 picture.onload = () => imageFor === loading && shown(picture, picture.naturalWidth, picture.naturalHeight)
 const shown = (source, width, height) => {
+  // What was drawn before it landed was drawn on the last picture: this one starts clean.
+  for (const c of history) free(c)
+  history = []
+  dropped = 0
   const first = canvasOf(width, height)
   first.getContext('2d').drawImage(source, 0, 0)
   const was = base

@@ -3,39 +3,22 @@
 # mod starts it, its page driven headless through a stroke and Done (test/e2e.mjs), the
 # page as the macOS panel keeps it warm, one picture after another (test/editor.mjs);
 # and on Linux and Windows a live Claude Code session, pasted into (test/live.mjs).
-#
-# Linux and Windows run on every pull request and on main. macOS never runs by itself:
-# a macOS runner costs about ten times a Linux one wherever minutes are billed (a private
-# copy of this repository, an organization's runners), so it runs only when started by
-# hand from the Actions tab with "macOS" ticked.
 name: test
 
 on:
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
-    inputs:
-      macos:
-        description: Also run on macOS (the Swift panel, pngpaste). Billed wherever Actions minutes are.
-        type: boolean
-        default: false
 
 permissions:
   contents: read
-
-# A newer push to a pull request makes its older run moot. Runs on main, and runs started
-# by hand, each finish: every commit on main is checked, and a macOS run is never lost.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: true
 
 jobs:
   test:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.macos && '["ubuntu-latest","windows-latest","macos-latest"]' || '["ubuntu-latest","windows-latest"]') }}
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:

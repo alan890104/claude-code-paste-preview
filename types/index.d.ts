@@ -29,6 +29,9 @@ declare module 'claude-code' {
       // shows and a new paste redraws the band alone, not every sent prompt.
       shot: StateFamily<Shot>
       inBox: number[]
+      // What 0.2 kept: every paste in one list, without `session`. Read once, to carry
+      // the pastes of a session updated in place (/reload-plugins).
+      shots: Omit<Shot, 'session'>[]
     }
   }
 }

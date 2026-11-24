@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ImageSource, Register } from 'claude-code'
 
 import type { Shot } from '../types'
-import { clipboardSteps, editorArgv, editsRoot, engineRoot, fromBase64, headStep, isMissing, join, LANGUAGE_PS, langOf, localeOf, osOf, sizeOf, sweepStep, thumbOf } from './platform'
+import { clipboardSteps, editorArgv, editsRoot, engineRoot, fromBase64, headStep, isMissing, isNewer, join, LANGUAGE_PS, langOf, localeOf, osOf, sizeOf, sweepStep, thumbOf } from './platform'
 import type { Env, Lang, Os, Step } from './platform'
 
 // paste-preview: a pasted image is only "[Image #1]" in the prompt box, which says
@@ -31,6 +31,8 @@ import type { Env, Lang, Os, Step } from './platform'
 // shows, so a paste redraws the band, not every sent prompt that has a picture.
 const SHOT = { plugin: 'paste-preview', key: 'shot' } as const
 const inBox = atom({ plugin: 'paste-preview', key: 'inBox' } as const, [])
+// What 0.2 kept: every paste in one list, read once after an update in a running session.
+const legacy = atom({ plugin: 'paste-preview', key: 'shots' } as const, [])
 
 const PLACEHOLDER = /\[Image #(\d+)\]/g
 // A terminal cell is about twice as tall as it is wide.
@@ -54,22 +56,27 @@ const WORDS = {
   'zh-Hant': {
     edit: '編輯', edited: '已編輯', noEditor: '編輯器沒有打開', noTools: '編輯器沒有打開：找不到 Swift 或 node', noNode: '編輯器沒有打開：找不到 node',
     noBrowser: '編輯器沒有打開：找不到瀏覽器', noClipboard: { linux: '讀不到剪貼簿：請安裝 wl-clipboard 或 xclip', windows: '讀不到剪貼簿：找不到 PowerShell' },
+    update: (latest: string, own: string) => `paste-preview ${latest} 已推出（你目前是 ${own}）。到 /plugin 更新，並在那裡開啟自動更新，之後就會自動保持最新。`,
   },
   'zh-Hans': {
     edit: '编辑', edited: '已编辑', noEditor: '编辑器没有打开', noTools: '编辑器没有打开：找不到 Swift 或 node', noNode: '编辑器没有打开：找不到 node',
     noBrowser: '编辑器没有打开：找不到浏览器', noClipboard: { linux: '读不到剪贴板：请安装 wl-clipboard 或 xclip', windows: '读不到剪贴板：找不到 PowerShell' },
+    update: (latest: string, own: string) => `paste-preview ${latest} 已发布（你现在是 ${own}）。到 /plugin 更新，并在那里开启自动更新，之后就会自动保持最新。`,
   },
   ja: {
     edit: '編集', edited: '編集済み', noEditor: 'エディタを開けませんでした', noTools: 'エディタを開けませんでした：Swift も node も見つかりません', noNode: 'エディタを開けませんでした：node が見つかりません',
     noBrowser: 'エディタを開けませんでした：ブラウザが見つかりません', noClipboard: { linux: 'クリップボードを読み取れませんでした：wl-clipboard か xclip をインストールしてください', windows: 'クリップボードを読み取れませんでした：PowerShell が見つかりません' },
+    update: (latest: string, own: string) => `paste-preview ${latest} が出ました（現在は ${own}）。/plugin で更新できます。そこで自動更新をオンにすると、常に最新に保たれます。`,
   },
   ko: {
     edit: '편집', edited: '편집됨', noEditor: '편집기를 열지 못했습니다', noTools: '편집기를 열지 못했습니다: Swift도 node도 찾을 수 없습니다', noNode: '편집기를 열지 못했습니다: node를 찾을 수 없습니다',
     noBrowser: '편집기를 열지 못했습니다: 브라우저를 찾을 수 없습니다', noClipboard: { linux: '클립보드를 읽지 못했습니다: wl-clipboard 또는 xclip을 설치하세요', windows: '클립보드를 읽지 못했습니다: PowerShell을 찾을 수 없습니다' },
+    update: (latest: string, own: string) => `paste-preview ${latest}이(가) 나왔습니다(현재 ${own}). /plugin에서 업데이트하고, 거기서 자동 업데이트를 켜 두면 항상 최신으로 유지됩니다.`,
   },
   en: {
     edit: 'Edit', edited: 'edited', noEditor: 'The editor did not open', noTools: 'The editor did not open: neither Swift nor node was found', noNode: 'The editor did not open: node was not found',
     noBrowser: 'The editor did not open: no browser was found', noClipboard: { linux: 'Could not read the clipboard: install wl-clipboard or xclip', windows: 'Could not read the clipboard: PowerShell was not found' },
+    update: (latest: string, own: string) => `paste-preview ${latest} is out (you have ${own}). Update it in /plugin, and turn on auto-update there to stay current.`,
   },
 }
 let lang: Lang = 'en'
@@ -79,6 +86,7 @@ let paths: Promise<Paths> | undefined
 let retryAt = 0
 let conversation: Promise<Conversation> | undefined
 let swept: Promise<unknown> | undefined
+let migrated: Promise<void> | undefined
 let queue: Promise<void> = Promise.resolve()
 let warm: Promise<Warm | undefined> | undefined
 let isTicking = false
@@ -147,9 +155,23 @@ const setUp = async ($: EngineInterface) => {
     const env = await readEnv($)
     const uid = os === 'windows' ? '' : await run($, ['id', '-u'])
     const userTemp = os === 'mac' ? await run($, ['getconf', 'DARWIN_USER_TEMP_DIR']).catch(() => '') : ''
-    const root = editsRoot(os, env, uid, userTemp || undefined)
+    let root = editsRoot(os, env, uid, userTemp || undefined)
     // The user's alone before anything is put in it (Windows' temp folder already is).
-    if (os !== 'windows') await $.process.run(['mkdir', '-p', '-m', '700', root])
+    // mkdir -p takes a folder that is there already, whoever made it: one this user does
+    // not own alone (theirs, 0700, not a link) is left be, for a fresh one of the mod's.
+    if (os !== 'windows') {
+      await $.process.run(['mkdir', '-p', '-m', '700', root])
+      const isOwn = (await run($, ['find', root, '-maxdepth', '0', '-type', 'd', '-user', uid, '-perm', '700']).catch(() => '')) === root
+      if (!isOwn) root = await run($, ['mktemp', '-d', `${root}.XXXXXX`])
+    }
+    // 0.2 kept macOS edits in /private/tmp/paste-preview: nothing new goes there, and what
+    // it holds goes as the rest does, a week on, where the folder is this user's.
+    if (os === 'mac') {
+      const old = '/private/tmp/paste-preview'
+      if ((await run($, ['find', old, '-maxdepth', '0', '-type', 'd', '-user', uid]).catch(() => '')) === old) {
+        void runStep($, { argv: ['find', old, '-mindepth', '1', '-maxdepth', '1', '-mtime', '+7', '-exec', 'rm', '-rf', '{}', '+'] }, 10_000).catch(() => undefined)
+      }
+    }
     // Old sessions' edits are no use to anyone after a week. A conversation's folder is
     // made once this is done, so a resumed old one's is not swept away under it; a sweep
     // that hangs is cut off.
@@ -163,10 +185,10 @@ const setUp = async ($: EngineInterface) => {
   })()
   const made = paths
   made.catch(async () => {
+    const now = await $.clock.now().catch(() => 0)
     if (paths !== made) return
+    retryAt = now + RETRY_MS
     paths = undefined
-    retryAt = Number.POSITIVE_INFINITY
-    retryAt = (await $.clock.now().catch(() => 0)) + RETRY_MS
   })
   return made
 }
@@ -401,8 +423,26 @@ const enqueue = ($: EngineInterface, n: number, at: Conversation, file?: string)
 const capture = async ($: EngineInterface, n: number) => {
   const at = await conversationNow($)
   const file = (await engineCopy($, n, at)) ?? (await clipboardCopy($, n, at)) ?? ''
-  if (file !== '') enqueue($, n, at, file)
+  if (file !== '') {
+    enqueue($, n, at, file)
+    // Its editor is on its way: should its picture not be kept in state, it is not
+    // looked for, and opened, again.
+    known.add(`${at.session}:${n}`)
+  }
   await refresh($, n, at, file, false)
+}
+
+// An update to this version applied with /reload-plugins runs it in the same session,
+// with the state 0.2 kept. Its pastes are carried over, as the conversation's now, before
+// any is looked for: none is taken for new, and an edit made before goes with it.
+const migrate = ($: EngineInterface) => {
+  migrated ??= (async () => {
+    const old = await read($, legacy)
+    if (old.length === 0) return
+    const { session } = await conversationNow($)
+    for (const shot of old) await update($, { ...SHOT, id: String(shot.n) }, held => held ?? { ...shot, session })
+  })().catch(() => undefined)
+  return migrated
 }
 
 // Within a conversation a known N is the same picture coming back (undo, a recalled
@@ -411,6 +451,7 @@ const sync = async ($: EngineInterface, text: string) => {
   const ns = numbersIn(text)
   if (!isSame(ns, await read($, inBox))) await update($, inBox, () => ns)
   if (ns.length === 0) return
+  await migrate($)
   const { session } = await lastConversation($)
   for (const n of ns) {
     if (capturing.has(n) || known.has(`${session}:${n}`)) continue
@@ -422,7 +463,9 @@ const sync = async ($: EngineInterface, text: string) => {
       capturing.delete(n)
       continue
     }
-    void capture($, n).finally(() => capturing.delete(n))
+    void capture($, n)
+      .catch(() => undefined)
+      .finally(() => capturing.delete(n))
   }
 }
 
@@ -546,9 +589,59 @@ export const dropOriginals = <B extends { type: string; [field: string]: unknown
   return content.filter((_, i) => !gone.has(i))
 }
 
-export const register: Register = on => {
+// ——— a newer version ———
+//
+// Claude Code updates a plugin from a marketplace like this one only where the person has
+// turned on that marketplace's auto-update (/plugin, Marketplaces). Elsewhere a fix
+// reaches nobody until they look. So, once a day, the mod asks GitHub for its manifest,
+// and where a newer version is out says so, once per version.
+//
+// The request is a plain GET of a public file: no cookie, no key, nothing about the
+// person. It is not made where Claude Code is told to keep to essential traffic, or where
+// the plugin's "updateCheck" option is off.
+
+const LATEST = 'https://raw.githubusercontent.com/alan890104/claude-code-paste-preview/main/.claude-plugin/plugin.json'
+const DAY = 24 * 60 * 60 * 1000
+
+// What the store keeps across sessions: when GitHub last answered, and the version the
+// person was last told of.
+type Checked = { at: number; told?: string }
+
+const versionIn = (text: string) => {
+  try {
+    const { version } = JSON.parse(text) as { version?: unknown }
+    return typeof version === 'string' ? version : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// `say` words the notice in the person's language. Only a version number is shown from
+// what GitHub answers, so a file that held anything else says nothing.
+async function checkForUpdate($: EngineInterface, say: (latest: string, own: string) => string) {
+  if (await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')) return
+  const now = await $.clock.now()
+  const last = (await $.store.get('update')) as Checked | undefined
+  if (last !== undefined && now - last.at < DAY) return
+  const own = versionIn(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) ?? ''
+  const answer = await $.http.fetch(LATEST)
+  if (!answer.ok) return
+  const latest = versionIn(answer.text) ?? ''
+  const isNews = isNewer(latest, own) && last?.told !== latest
+  await $.store.set('update', { at: now, told: isNews ? latest : last?.told } satisfies Checked)
+  if (isNews) $.ui.toast(say(latest, own), { timeoutMs: 15_000 })
+}
+
+export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     start($)
+    // A newer version, said a few seconds in, once set-up has found the person's language.
+    if (e.isInteractive && options.updateCheck !== false) {
+      void setUp($)
+        .then(() => $.clock.sleep(5000))
+        .then(() => checkForUpdate($, WORDS[lang].update))
+        .catch(() => undefined)
+    }
     return next(e)
   })
 
@@ -558,15 +651,6 @@ export const register: Register = on => {
     void keepWarm($)
     // Only the band's list is awaited; finding the picture runs on behind it.
     await sync($, box.text).catch(() => undefined)
-    return box
-  })
-
-  // The box changed with no edit to carry it (a recalled prompt, an undo, a draft put
-  // back): the band follows at once rather than at the next half-second look.
-  on('prompt.change', async ($, e, next) => {
-    const box = await next(e)
-    start($)
-    void sync($, e.text).catch(() => undefined)
     return box
   })
 
@@ -655,7 +739,7 @@ export const register: Register = on => {
               )}
               <Box flexDirection="row" columnGap={1}>
                 <Text key={`name-${n}`} dimColor>Image #{n}{shot?.isEdited ? ` ${WORDS[lang].edited}` : ''}</Text>
-                {shot !== undefined && shot.file !== '' && <Button key={`edit-${n}`} label={WORDS[lang].edit} plain {...hotkey} onPress={() => conversationNow($).then(at => enqueue($, n, at)).catch(() => undefined)} />}
+                {shot !== undefined && shot.file !== '' && <Button key={`edit-${n}`} label={WORDS[lang].edit} plain {...hotkey} onPress={() => conversationNow($).then(at => enqueue($, n, at, shot.file)).catch(() => undefined)} />}
               </Box>
             </Box>
           )

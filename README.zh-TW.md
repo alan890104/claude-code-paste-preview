@@ -15,6 +15,8 @@
 
 按 `y` 加入 marketplace，再選一個 scope（選 user scope 會在每個 session 載入）。安裝後立刻生效，不用重開。
 
+**更新**：想在修正一推出就拿到，請開啟一次自動更新：`/plugin` → Marketplaces → `paste-preview` → Turn on auto-update。之後 Claude Code 每次啟動都會更新它，並提示你執行 `/reload-plugins`。沒有開自動更新的話，paste-preview 會在有新版本時自己提醒你：它每天一次從 GitHub 讀取自己的 `plugin.json`，不會送出任何關於你的資料。要關掉這個提醒：`/plugin` → `paste-preview` → Configure options → Check for updates，或設定 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`。
+
 https://github.com/user-attachments/assets/d68fe9a9-9179-4e3e-868f-2049647287cb
 
 這是一個 [Claude Code](https://claude.com/claude-code) 的 mod，專門處理你貼上的圖片。在終端機裡，貼上的圖只會顯示成 `[Image #1]`，貼個三張之後，就分不出哪張是哪張了。裝了這個 mod 之後：
@@ -62,7 +64,7 @@ https://github.com/user-attachments/assets/d68fe9a9-9179-4e3e-868f-2049647287cb
 ## 運作原理
 
 - Claude Code 會把每次貼上的圖存到 `<tmp>/claude-<uid>/<project>/<session>/images/<N>.png`（`<tmp>` 在 macOS 是 `/tmp`，在 Linux 是 `$TMPDIR` 或 `/tmp`），Windows 上是 `%TEMP%\claude\<project>\<session>\images\<N>.png`；三個系統都可以用 `CLAUDE_CODE_TMPDIR` 改位置。mod 讀的就是這一份，所以縮圖和編輯器顯示的，正是你貼上的那張。這個資料夾是 Claude Code 內部的存放方式，不是 API；如果之後位置改了，mod 會改讀剪貼簿。
-- 改過的圖會存到 macOS 的 `$TMPDIR/paste-preview/<session>/<N>.png`、Linux 的 `/tmp/paste-preview-<uid>/<session>/<N>.png`（都是只有你自己讀得到的資料夾），以及 Windows 的 `%TEMP%\paste-preview\<session>\<N>.png`。超過一週的資料夾會自動清掉。
+- 改過的圖會存到 macOS 上你自己的暫存資料夾（`/var/folders/…/T/paste-preview/<session>/<N>.png`）、Linux 的 `/tmp/paste-preview-<uid>/<session>/<N>.png`（都是只有你自己讀得到的資料夾），以及 Windows 的 `%TEMP%\paste-preview\<session>\<N>.png`。超過一週的資料夾會自動清掉。
 - Linux 和 Windows 上，不是每個系統都內建能做縮圖的工具，所以縮圖列直接從圖檔開頭讀出圖片尺寸，再由終端機自己縮放圖片；編輯完成時，編輯器會順便送回一份 480 px 的副本，給縮圖列使用。
 - 外掛無法修改或新增訊息裡的圖片，只能拿掉。所以按 Enter 時，mod 會拿掉原圖的 image block（`session.append`），並在輸入框的內容旁附上一則給 Claude 的說明（`prompt.submit` context），指明改過的檔案，讓 Claude 去讀。你會在對話紀錄裡看到這次讀檔。輸入框和對話紀錄裡仍然顯示 `[Image #N]`。
 - 為了找出該拿掉哪一個 block，mod 會比對圖片在訊息裡的位置和長寬比。兩者都對不上時，就什麼也不拿掉：這時 Claude 會同時收到原圖和修改後的圖，而不會拿錯張。
@@ -88,7 +90,7 @@ node test/editor.mjs              # the editor page alone: undo, and memory acro
 node test/live.mjs               # Linux, Windows: a live session pasted into, offline
 ```
 
-`test/e2e.mjs` 會把一張圖放進剪貼簿，再用 mod 自己執行的指令讀回來；接著像 mod 一樣啟動編輯器的伺服器，用無頭瀏覽器在頁面上作畫，並檢查編輯後的圖有存到 mod 讀取的位置。它需要 `playwright-core`（用 `PLAYWRIGHT_DIR` 指向一個 `node_modules` 裡有它的資料夾）和 Chrome。`test/live.mjs` 會在偽終端機（`@lydell/node-pty`，在同一個資料夾裡）中啟動載入 mod 的 Claude Code 本體，用 Claude Code 自己的按鍵貼圖，在 mod 打開的編輯器裡作畫，按 Enter，再讀對話紀錄；它用的 API key 是隨便編的，API 位址是一個沒在監聽的本機 port，所以不會送出任何東西。CI（`.github/workflows/test.yml`）會在每個 pull request 和推到 main 時，於 Linux 和 Windows 上連同外掛測試一起執行它們（包含 live session）。macOS 只在手動啟動時執行（Actions → test → Run workflow，勾選「macOS」）：只要 Actions 的分鐘數需要計費，macOS runner 的費用大約是 Linux 的十倍。
+`test/e2e.mjs` 會把一張圖放進剪貼簿，再用 mod 自己執行的指令讀回來；接著像 mod 一樣啟動編輯器的伺服器，用無頭瀏覽器在頁面上作畫，並檢查編輯後的圖有存到 mod 讀取的位置。它需要 `playwright-core`（用 `PLAYWRIGHT_DIR` 指向一個 `node_modules` 裡有它的資料夾）和 Chrome。`test/live.mjs` 會在偽終端機（`@lydell/node-pty`，在同一個資料夾裡）中啟動載入 mod 的 Claude Code 本體，用 Claude Code 自己的按鍵貼圖，在 mod 打開的編輯器裡作畫，按 Enter，再讀對話紀錄；它用的 API key 是隨便編的，API 位址是一個沒在監聽的本機 port，所以不會送出任何東西。CI（`.github/workflows/test.yml`）會在 macOS、Linux 和 Windows 上連同外掛測試一起執行它們（live session 只在 Linux 和 Windows 上執行）。
 
 載入過這個資料夾一次之後，引擎的型別宣告會寫到 `.claude-plugin/types/`；之後用 `tsc -p .` 就能對 mod 做型別檢查。
 

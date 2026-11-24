@@ -166,3 +166,13 @@ export const headStep = (os: Os, file: string): Step =>
     : { argv: ['sh', '-c', 'head -c 65536 "$1" | base64', 'sh', file] }
 
 export const fromBase64 = (text: string) => Uint8Array.from(atob(text.replace(/\s+/g, '')), c => c.charCodeAt(0))
+
+// Whether version `a` is past `b`, both plainly major.minor.patch; anything else (a
+// pre-release, a word, nothing) is never newer.
+export const isNewer = (a: string, b: string) => {
+  const parse = (v: string) => (/^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(v) ? v.split('.').map(Number) : undefined)
+  const [x, y] = [parse(a), parse(b)]
+  if (x === undefined || y === undefined) return false
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return (x[i] ?? 0) > (y[i] ?? 0)
+  return false
+}

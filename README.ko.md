@@ -15,6 +15,8 @@
 
 마켓플레이스를 추가하려면 `y`로 답하고, scope를 선택합니다(user scope를 선택하면 모든 세션에서 로드됩니다). 바로 실행되며, 재시작은 필요 없습니다.
 
+**업데이트**: 수정 사항을 바로 받으려면 자동 업데이트를 한 번 켜 두세요: `/plugin` → Marketplaces → `paste-preview` → Turn on auto-update. 그러면 Claude Code가 시작할 때마다 업데이트하고 `/reload-plugins`를 실행하라고 알려 줍니다. 자동 업데이트를 켜지 않아도 새 버전이 나오면 paste-preview가 직접 알려 줍니다. 하루에 한 번 GitHub에서 자신의 `plugin.json`을 읽을 뿐, 사용자에 관한 정보는 아무것도 보내지 않습니다. 끄려면: `/plugin` → `paste-preview` → Configure options → Check for updates, 또는 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`를 설정하세요.
+
 https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 
 [Claude Code](https://claude.com/claude-code)용 mod로, 붙여넣은 이미지를 다룹니다. 터미널에서는 붙여넣은 이미지가 `[Image #1]`로만 표시되어서, 세 번쯤 붙여넣고 나면 어느 것이 어느 것인지 알 수 없게 됩니다. 이 mod를 설치하면 다음과 같이 됩니다.
@@ -62,7 +64,7 @@ https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 ## 동작 방식
 
 - Claude Code는 붙여넣을 때마다 이미지를 `<tmp>/claude-<uid>/<project>/<session>/images/<N>.png`에 저장합니다(`<tmp>`는 macOS에서는 `/tmp`, Linux에서는 `$TMPDIR` 또는 `/tmp`). Windows에서는 `%TEMP%\claude\<project>\<session>\images\<N>.png`이며, 세 운영체제 모두 `CLAUDE_CODE_TMPDIR`로 위치를 바꿀 수 있습니다. mod는 이 사본을 읽기 때문에, 썸네일과 편집기에는 붙여넣은 이미지가 그대로 표시됩니다. 이 폴더는 Claude Code 내부의 구조일 뿐 API가 아닙니다. 위치가 바뀌면 mod는 클립보드를 읽는 방식으로 대체합니다.
-- 편집한 이미지는 macOS에서는 `$TMPDIR/paste-preview/<session>/<N>.png`에, Linux에서는 `/tmp/paste-preview-<uid>/<session>/<N>.png`(둘 다 본인만 읽을 수 있는 폴더)에, Windows에서는 `%TEMP%\paste-preview\<session>\<N>.png`에 저장됩니다. 일주일이 지난 폴더는 삭제됩니다.
+- 편집한 이미지는 macOS에서는 본인 전용 임시 폴더(`/var/folders/…/T/paste-preview/<session>/<N>.png`)에, Linux에서는 `/tmp/paste-preview-<uid>/<session>/<N>.png`(둘 다 본인만 읽을 수 있는 폴더)에, Windows에서는 `%TEMP%\paste-preview\<session>\<N>.png`에 저장됩니다. 일주일이 지난 폴더는 삭제됩니다.
 - Linux와 Windows에는 모든 시스템에 기본으로 들어 있는 썸네일 생성 도구가 없습니다. 그래서 썸네일 띠는 이미지 헤더에서 크기를 읽고, 이미지 축소는 터미널이 직접 처리합니다. 편집한 이미지는 편집기에서 띠에 쓸 480 px 사본과 함께 돌아옵니다.
 - 플러그인은 메시지 안의 이미지를 바꾸거나 추가할 수 없고, 제거만 할 수 있습니다. 그래서 Enter를 누르는 시점에 mod는 원본 붙여넣기의 image block을 제거하고(`session.append`), 입력 내용 옆에 편집된 파일을 알려 주는 Claude용 메모(`prompt.submit` context)를 덧붙입니다. Claude는 그 파일을 읽습니다. 이 읽기는 대화 기록에서 볼 수 있습니다. 입력창과 대화 기록에는 계속 `[Image #N]`이 표시됩니다.
 - 올바른 block을 찾기 위해 mod는 메시지 안에서 이미지의 위치와 가로세로 비율을 확인합니다. 둘 다 맞지 않으면 아무것도 제거하지 않습니다. 그러면 Claude는 원본과 편집본을 모두 받게 되고, 엉뚱한 이미지가 제거되는 일은 없습니다.
@@ -88,7 +90,7 @@ node test/editor.mjs              # the editor page alone: undo, and memory acro
 node test/live.mjs               # Linux, Windows: a live session pasted into, offline
 ```
 
-`test/e2e.mjs`는 클립보드에 이미지를 넣고 mod가 실행하는 명령으로 다시 읽어 옵니다. 그다음 mod와 같은 방식으로 편집기 서버를 시작하고, 헤드리스 브라우저로 페이지에 그림을 그린 뒤, 편집된 이미지가 mod가 읽는 위치에 저장되는지 확인합니다. `playwright-core`(`PLAYWRIGHT_DIR`에는 그 `node_modules`가 들어 있는 폴더를 지정합니다)와 Chrome이 필요합니다. `test/live.mjs`는 mod를 로드한 Claude Code 자체를 의사 터미널(`@lydell/node-pty`, 같은 폴더에 있음)에서 실행하고, Claude Code의 붙여넣기 키로 붙여넣은 뒤, mod가 연 편집기에서 그림을 그리고, Enter를 눌러 대화 기록을 읽습니다. 사용하는 API 키는 임의로 만든 것이고 API 주소는 닫힌 로컬 포트이므로, 아무것도 전송되지 않습니다. CI(`.github/workflows/test.yml`)는 풀 리퀘스트와 main으로의 push마다 Linux와 Windows에서 플러그인 테스트와 함께 이들을 실행합니다(라이브 세션 포함). macOS는 직접 시작할 때만 실행됩니다(Actions → test → Run workflow에서 “macOS” 선택). Actions 사용 시간이 과금되는 환경에서는 macOS 러너 비용이 Linux의 약 10배이기 때문입니다.
+`test/e2e.mjs`는 클립보드에 이미지를 넣고 mod가 실행하는 명령으로 다시 읽어 옵니다. 그다음 mod와 같은 방식으로 편집기 서버를 시작하고, 헤드리스 브라우저로 페이지에 그림을 그린 뒤, 편집된 이미지가 mod가 읽는 위치에 저장되는지 확인합니다. `playwright-core`(`PLAYWRIGHT_DIR`에는 그 `node_modules`가 들어 있는 폴더를 지정합니다)와 Chrome이 필요합니다. `test/live.mjs`는 mod를 로드한 Claude Code 자체를 의사 터미널(`@lydell/node-pty`, 같은 폴더에 있음)에서 실행하고, Claude Code의 붙여넣기 키로 붙여넣은 뒤, mod가 연 편집기에서 그림을 그리고, Enter를 눌러 대화 기록을 읽습니다. 사용하는 API 키는 임의로 만든 것이고 API 주소는 닫힌 로컬 포트이므로, 아무것도 전송되지 않습니다. CI(`.github/workflows/test.yml`)는 macOS, Linux, Windows에서 플러그인 테스트와 함께 이들을 실행합니다(라이브 세션은 Linux와 Windows에서).
 
 이 폴더를 한 번 로드하면 엔진의 타입 선언이 `.claude-plugin/types/`에 기록됩니다. 그 후에는 `tsc -p .`로 mod를 타입 검사할 수 있습니다.
 

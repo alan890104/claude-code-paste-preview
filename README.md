@@ -15,6 +15,8 @@ At the prompt of a Claude Code session in a terminal:
 
 Answer `y` to add the marketplace, then pick a scope (user scope loads it in every session). It runs at once, with no restart.
 
+**Updates.** To get each fix as soon as it is out, turn on auto-update once: `/plugin` → Marketplaces → `paste-preview` → Turn on auto-update. Claude Code then updates it when it starts, and tells you to run `/reload-plugins`. Without auto-update, paste-preview says so itself when a newer version is out: once a day it reads its own `plugin.json` from GitHub, and sends nothing about you. To turn that off: `/plugin` → `paste-preview` → Configure options → Check for updates, or set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`.
+
 https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 
 A [Claude Code](https://claude.com/claude-code) mod for the images you paste. In the terminal a pasted image is just `[Image #1]`, and three pastes later you can't tell which is which. With this mod:
@@ -62,7 +64,7 @@ In a plain browser tab (the default browser on Linux or Windows, where no Chromi
 ## How it works
 
 - Claude Code writes each paste to `<tmp>/claude-<uid>/<project>/<session>/images/<N>.png` (`<tmp>` is `/tmp` on macOS and `$TMPDIR` or `/tmp` on Linux), or `%TEMP%\claude\<project>\<session>\images\<N>.png` on Windows; `CLAUDE_CODE_TMPDIR` moves it on all three. The mod reads that copy, so the thumbnail and the editor show exactly what was pasted. That folder is Claude Code's internal layout, not an API; if it moves, the mod falls back to reading the clipboard.
-- Edited pictures are written to `$TMPDIR/paste-preview/<session>/<N>.png` on macOS and `/tmp/paste-preview-<uid>/<session>/<N>.png` on Linux (folders only you can read) and `%TEMP%\paste-preview\<session>\<N>.png` on Windows. Folders older than a week are removed.
+- Edited pictures are written to your own temp folder on macOS (`/var/folders/…/T/paste-preview/<session>/<N>.png`) and `/tmp/paste-preview-<uid>/<session>/<N>.png` on Linux (folders only you can read) and `%TEMP%\paste-preview\<session>\<N>.png` on Windows. Folders older than a week are removed.
 - On Linux and Windows no tool for making thumbnails comes with every system, so the band reads the picture's size from its header and the terminal scales the picture itself; an edit comes back from the editor with a 480 px copy for the band.
 - A plugin cannot change or add an image in a message, only drop one. So at Enter the mod drops the original paste's image block (`session.append`) and adds a note for Claude beside the prompt (`prompt.submit` context) naming the edited file, which Claude then reads. You'll see that read in the transcript. The prompt box and the transcript keep showing `[Image #N]`.
 - To find the right block, the mod checks the image's place in the message and its aspect ratio. If neither matches, it drops nothing: Claude then gets both the original and the edit, never the wrong one.
@@ -88,7 +90,7 @@ node test/editor.mjs              # the editor page alone: undo, and memory acro
 node test/live.mjs               # Linux, Windows: a live session pasted into, offline
 ```
 
-`test/e2e.mjs` puts a picture on the clipboard and reads it back with the commands the mod runs, starts the editor server as the mod does, draws on the page with a headless browser and checks the edited picture lands where the mod reads it. It needs `playwright-core` (`PLAYWRIGHT_DIR` names a folder whose `node_modules` holds it) and Chrome. `test/live.mjs` starts Claude Code itself with the mod in a pseudo-terminal (`@lydell/node-pty`, in the same folder), pastes with Claude Code's own key, draws in the editor the mod opens, presses Enter and reads the transcript; its key is made up and the API's address is a closed local port, so nothing is sent. CI (`.github/workflows/test.yml`) runs them with the plugin tests on Linux and Windows for every pull request and push to main, the live session included. macOS runs only when started by hand (Actions → test → Run workflow, with “macOS” ticked): wherever Actions minutes are billed, a macOS runner costs about ten times a Linux one.
+`test/e2e.mjs` puts a picture on the clipboard and reads it back with the commands the mod runs, starts the editor server as the mod does, draws on the page with a headless browser and checks the edited picture lands where the mod reads it. It needs `playwright-core` (`PLAYWRIGHT_DIR` names a folder whose `node_modules` holds it) and Chrome. `test/live.mjs` starts Claude Code itself with the mod in a pseudo-terminal (`@lydell/node-pty`, in the same folder), pastes with Claude Code's own key, draws in the editor the mod opens, presses Enter and reads the transcript; its key is made up and the API's address is a closed local port, so nothing is sent. CI (`.github/workflows/test.yml`) runs them with the plugin tests on macOS, Linux and Windows (the live session on Linux and Windows).
 
 Loading the folder once writes the engine's type declarations to `.claude-plugin/types/`; after that, `tsc -p .` type-checks the mod.
 
