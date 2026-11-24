@@ -985,8 +985,9 @@ test('versions are compared part by part, and only plain ones', async () => {
 // mkdir -p accepts a folder that is already there, whoever made it. In a shared temp
 // folder another account could make the mod's first: then read the pictures put in it,
 // swap the edit Claude is pointed at, or (macOS) leave a panel binary that would be run.
-// A folder the user does not own alone (0700, theirs, not a link) is not used; a fresh
-// one of the mod's own is made instead.
+// A folder that is not the user's (theirs, a real folder, no one else can write in it) is
+// not used; a fresh one of the mod's own is made instead. One of theirs that others can
+// read (made by another tool's mkdir) is closed to them and kept, not made anew each start.
 for (const os of ['mac', 'linux'] as const) {
   test(`${os}: a working folder another account made first is not used`, async ($, on) => {
     const clock = mock.clock(on)
@@ -995,7 +996,7 @@ for (const os of ['mac', 'linux'] as const) {
     await paste($, box)
     await until(clock, () => asked(w).length > 0)
     const root = system.edits.replace(/\/abcdef12$/, '')
-    expect(w.runs).toContainEqual(['find', root, '-maxdepth', '0', '-type', 'd', '-user', '501', '-perm', '700'])
+    expect(w.runs).toContainEqual(['find', root, '-maxdepth', '0', '-type', 'd', '-user', '501', '!', '-perm', '-020', '!', '-perm', '-002'])
     const own = `${root}.Ab12Cd`
     expect(asked(w)[0]?.out).toBe(`${own}/abcdef12/1.png`)
     // Nothing of the other account's folder is run or written to after the check.
@@ -1003,7 +1004,33 @@ for (const os of ['mac', 'linux'] as const) {
     const into = (act: string) => act.includes(`${root}/`) || act.endsWith(` ${root}`)
     expect(w.acts.slice(checked + 1).filter(into)).toEqual([])
   })
+
+  test(`${os}: a working folder of the user's that others can read is closed to them and kept`, async ($, on) => {
+    const clock = mock.clock(on)
+    const system = SYSTEMS[os]
+    const { w, box } = world(on, system)
+    await paste($, box)
+    await until(clock, () => asked(w).length > 0)
+    const root = system.edits.replace(/\/abcdef12$/, '')
+    const checked = w.acts.indexOf(`run find ${root} -maxdepth 0 -type d -user 501 ! -perm -020 ! -perm -002`)
+    const closed = w.acts.indexOf(`run chmod 700 ${root}`)
+    expect(checked).toBeGreaterThan(-1)
+    expect(closed).toBeGreaterThan(checked)
+    // Closed first, before anything is put in it or swept.
+    expect(w.acts.slice(checked + 1, closed).filter(act => act.includes(root))).toEqual([])
+    expect(w.runs.filter(argv => argv[0] === 'mktemp')).toEqual([])
+    expect(asked(w)[0]?.out).toBe(`${system.edits}/1.png`)
+  })
 }
+
+// A folder of the user's that could not be closed is not used either.
+test('linux: a working folder that could not be closed to others is not used', async ($, on) => {
+  const clock = mock.clock(on)
+  const { w, box } = world(on, SYSTEMS.linux, { fails: ['chmod 700 /tmp/paste-preview-501'] })
+  await paste($, box)
+  await until(clock, () => asked(w).length > 0)
+  expect(asked(w)[0]?.out).toBe('/tmp/paste-preview-501.Ab12Cd/abcdef12/1.png')
+})
 
 // A paste whose picture could not be kept in state (the host busy) still opens one editor.
 test('linux: a paste whose state could not be written once opens one editor', async ($, on) => {

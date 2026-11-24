@@ -157,12 +157,14 @@ const setUp = async ($: EngineInterface) => {
     const userTemp = os === 'mac' ? await run($, ['getconf', 'DARWIN_USER_TEMP_DIR']).catch(() => '') : ''
     let root = editsRoot(os, env, uid, userTemp || undefined)
     // The user's alone before anything is put in it (Windows' temp folder already is).
-    // mkdir -p takes a folder that is there already, whoever made it: one this user does
-    // not own alone (theirs, 0700, not a link) is left be, for a fresh one of the mod's.
+    // mkdir -p takes a folder that is there already, whoever made it: one that is not this
+    // user's (theirs, a real folder, no one else can write in it) is left be, for a fresh
+    // one of the mod's. One of theirs others can read (another tool's mkdir) is closed.
     if (os !== 'windows') {
       await $.process.run(['mkdir', '-p', '-m', '700', root])
-      const isOwn = (await run($, ['find', root, '-maxdepth', '0', '-type', 'd', '-user', uid, '-perm', '700']).catch(() => '')) === root
-      if (!isOwn) root = await run($, ['mktemp', '-d', `${root}.XXXXXX`])
+      const isOwn = (await run($, ['find', root, '-maxdepth', '0', '-type', 'd', '-user', uid, '!', '-perm', '-020', '!', '-perm', '-002']).catch(() => '')) === root
+      const isClosed = isOwn && (await run($, ['chmod', '700', root]).then(() => true, () => false))
+      if (!isClosed) root = await run($, ['mktemp', '-d', `${root}.XXXXXX`])
     }
     // 0.2 kept macOS edits in /private/tmp/paste-preview: nothing new goes there, and what
     // it holds goes as the rest does, a week on, where the folder is this user's.

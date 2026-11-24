@@ -147,8 +147,9 @@ test('thumbnails are read once per version, and kept to 8 MiB', async ($, on) =>
   on('session.id', () => ({ value: SESSION }))
   on('state.get', ($, e) => ({ value: { value: state(e), version: 1 } }))
   const big = PIXEL.slice(0, 44) + 'A'.repeat(2_700_000)
+  // By name: on Windows the kit hands the hook /p/1.png as D:\p\1.png.
   on('fs.read', ($, e) => {
-    reads.push(e.path)
+    reads.push(`/p/${e.path.split(/[\\/]/).at(-1)}`)
     return { value: { base64: big } }
   })
   const row = (n: number) => $.ui.mount({ plugin: 'paste-preview', surface: 'terminal', component: 'UserMessage', requestId: `row-${n}`, props: { text: `[Image #${n}] look`, origin: { kind: 'composer' }, isExpanded: false } })
