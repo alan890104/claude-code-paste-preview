@@ -27,7 +27,9 @@ import type { Env, Lang, Os, Step } from './platform'
 // Sent prompts show their pictures too, each named "Image #N", so the history says which
 // picture was which.
 
-const shots = atom({ plugin: 'paste-preview', key: 'shots' } as const, [])
+// Each paste is a value of its own, by its number: a drawing reads only the pictures it
+// shows, so a paste redraws the band, not every sent prompt that has a picture.
+const SHOT = { plugin: 'paste-preview', key: 'shot' } as const
 const inBox = atom({ plugin: 'paste-preview', key: 'inBox' } as const, [])
 
 const PLACEHOLDER = /\[Image #(\d+)\]/g
@@ -40,7 +42,11 @@ const THUMB_PX = '480'
 const READABLE = 4 * 1024 * 1024
 const DRAWABLE = 2 * 1024 * 1024
 
-type Paths = { os: Os; edits: string; tmp: string; session: string; terminal: string; panel: string | undefined; lang: Lang; env: Env }
+// What holds for the process (Paths), and what holds for one conversation: /clear and
+// /resume start another in the same process, under another session id and with no
+// session.start, and Claude Code keeps its pastes in a folder named by that id.
+type Paths = { os: Os; root: string; tmp: string; terminal: string; panel: string | undefined; lang: Lang; env: Env }
+type Conversation = { session: string; edits: string; images?: string }
 
 // The words follow the system's language (./platform says how it is read): Traditional
 // or Simplified Chinese, Japanese, Korean, or English. The terms follow macOS Preview.
@@ -70,13 +76,23 @@ let lang: Lang = 'en'
 
 // Module variables start over on a hot reload; everything a drawing reads is in $.state.
 let paths: Promise<Paths> | undefined
-let images: string | undefined
+let retryAt = 0
+let conversation: Promise<Conversation> | undefined
+let swept: Promise<unknown> | undefined
 let queue: Promise<void> = Promise.resolve()
 let warm: Promise<Warm | undefined> | undefined
 let isTicking = false
+let isStarted = false
 let isClipboardToldOff = false
+// Pastes being looked for, by number; pastes already known, as `<session>:<N>`, so a known
+// one costs a keystroke no read of state.
 const capturing = new Set<number>()
-const thumbs = new Map<string, string>()
+const known = new Set<string>()
+// The thumbnails' bytes, one per file, the least recently drawn let go first past this
+// much: off macOS a thumbnail is the paste itself, up to 2 MiB, and sessions paste many.
+const thumbs = new Map<string, { gen: number; png: string }>()
+const THUMBS_BYTES = 8 * 1024 * 1024
+let thumbsHeld = 0
 
 // The images a text holds, in order.
 const numbersIn = (text: string) => [...new Set([...text.matchAll(PLACEHOLDER)].map(m => Number(m[1])))]
@@ -85,7 +101,7 @@ const numbersIn = (text: string) => [...new Set([...text.matchAll(PLACEHOLDER)].
 const isSame = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every((n, i) => n === b[i])
 
 const run = async ($: EngineInterface, argv: string[]) => (await $.process.run(argv)).stdout.trim()
-const runStep = ($: EngineInterface, step: Step) => $.process.run(step.argv, step.env === undefined ? undefined : { env: step.env })
+const runStep = ($: EngineInterface, step: Step, timeoutMs?: number) => $.process.run(step.argv, { ...(step.env === undefined ? {} : { env: step.env }), ...(timeoutMs === undefined ? {} : { timeoutMs }) })
 
 // The panel is compiled once (a few seconds) for each version of its source, and named
 // by it: the mod and the panel talk to each other, so a binary another install of the
@@ -107,10 +123,10 @@ const buildPanel = async ($: EngineInterface, root: string) => {
 
 // Each name spelled out: $.env.get takes literals only.
 const readEnv = async ($: EngineInterface): Promise<Env> => {
-  const [CLAUDE_CODE_TMPDIR, TMPDIR, TMP, TEMP, SystemRoot, WAYLAND_DISPLAY] = await Promise.all([
-    $.env.get('CLAUDE_CODE_TMPDIR'), $.env.get('TMPDIR'), $.env.get('TMP'), $.env.get('TEMP'), $.env.get('SystemRoot'), $.env.get('WAYLAND_DISPLAY'),
+  const [HOME, CLAUDE_CODE_TMPDIR, TMPDIR, TMP, TEMP, SystemRoot, WAYLAND_DISPLAY] = await Promise.all([
+    $.env.get('HOME'), $.env.get('CLAUDE_CODE_TMPDIR'), $.env.get('TMPDIR'), $.env.get('TMP'), $.env.get('TEMP'), $.env.get('SystemRoot'), $.env.get('WAYLAND_DISPLAY'),
   ])
-  return { CLAUDE_CODE_TMPDIR, TMPDIR, TMP, TEMP, SystemRoot, WAYLAND_DISPLAY }
+  return { HOME, CLAUDE_CODE_TMPDIR, TMPDIR, TMP, TEMP, SystemRoot, WAYLAND_DISPLAY }
 }
 
 const languageOf = async ($: EngineInterface, os: Os) => {
@@ -120,39 +136,79 @@ const languageOf = async ($: EngineInterface, os: Os) => {
   return localeOf({ LC_ALL, LC_MESSAGES, LANG })
 }
 
-const setUp = ($: EngineInterface) => {
+// A set-up that failed (a command it needs is missing) is tried again after a while, not
+// on every half-second look.
+const RETRY_MS = 10_000
+const setUp = async ($: EngineInterface) => {
+  if (paths === undefined && retryAt > 0 && (await $.clock.now()) < retryAt) throw new Error('paste-preview: set-up failed a moment ago')
   paths ??= (async () => {
-    const session = await $.session.id()
     const osVariable = await $.env.get('OS')
     const os = osOf($.plugin.root, osVariable, osVariable === 'Windows_NT' ? '' : await run($, ['uname', '-s']).catch(() => ''))
     const env = await readEnv($)
     const uid = os === 'windows' ? '' : await run($, ['id', '-u'])
-    const root = editsRoot(os, env, uid)
-    const at = join(os, root, session.slice(0, 8))
-    // Windows has no mkdir to run; a file written there makes the folders on the way.
-    if (os === 'windows') await $.fs.write(join(os, at, '.keep'), '')
-    else await $.process.run(os === 'mac' ? ['mkdir', '-p', at] : ['mkdir', '-p', '-m', '700', root, at])
-    // Old sessions' edits are no use to anyone after a week.
-    void runStep($, sweepStep(os, root)).catch(() => undefined)
+    const userTemp = os === 'mac' ? await run($, ['getconf', 'DARWIN_USER_TEMP_DIR']).catch(() => '') : ''
+    const root = editsRoot(os, env, uid, userTemp || undefined)
+    // The user's alone before anything is put in it (Windows' temp folder already is).
+    if (os !== 'windows') await $.process.run(['mkdir', '-p', '-m', '700', root])
+    // Old sessions' edits are no use to anyone after a week. A conversation's folder is
+    // made once this is done, so a resumed old one's is not swept away under it; a sweep
+    // that hangs is cut off.
+    swept = runStep($, sweepStep(os, root), 10_000).catch(() => undefined)
     const terminal = (await $.env.get('TERM_PROGRAM')) ?? ''
     // Claude Code's own temp folder, as it resolves it (./platform says how, per system).
     const base = engineRoot(os, env, uid)
     const tmp = (await $.fs.stat(base, { resolve: true }).catch(() => undefined))?.realPath ?? (os === 'mac' ? `/private/tmp/claude-${uid}` : base)
     lang = langOf(os, await languageOf($, os))
-    return { os, edits: at, tmp, session, terminal, panel: os === 'mac' ? await buildPanel($, root) : undefined, lang, env }
+    return { os, root, tmp, terminal, panel: os === 'mac' ? await buildPanel($, root) : undefined, lang, env }
   })()
-  return paths
+  const made = paths
+  made.catch(async () => {
+    if (paths !== made) return
+    paths = undefined
+    retryAt = Number.POSITIVE_INFINITY
+    retryAt = (await $.clock.now().catch(() => 0)) + RETRY_MS
+  })
+  return made
 }
+
+// The conversation the box belongs to now, asked of the engine each time (a paste, the
+// half-second look), since nothing tells the mod first; its folder made once.
+const conversationNow = async ($: EngineInterface) => {
+  const session = await $.session.id()
+  const held = conversation === undefined ? undefined : await conversation.catch(() => undefined)
+  if (held !== undefined && held.session === session) return held
+  const made = (async (): Promise<Conversation> => {
+    const { os, root } = await setUp($)
+    await swept
+    const edits = join(os, root, session.slice(0, 8))
+    // Windows has no mkdir to run; a file written there makes the folders on the way.
+    if (os === 'windows') await $.fs.write(join(os, edits, '.keep'), '')
+    else {
+      await $.process.run(['mkdir', '-p', '-m', '700', root, edits])
+      // A resumed conversation's folder may be a week old: marked in use, so the sweep of
+      // another Claude Code starting meanwhile leaves it.
+      await $.process.run(['touch', edits])
+    }
+    return { session, edits }
+  })()
+  conversation = made
+  made.catch(() => conversation === made && (conversation = undefined))
+  return made
+}
+
+// The conversation as last asked, for a keystroke, which should not wait on the engine.
+const lastConversation = ($: EngineInterface) => conversation ?? conversationNow($)
+const sessionOf = ($: EngineInterface) => $.session.id().catch(() => undefined)
 
 // Claude Code's own copy of paste N; it lands a moment after the placeholder does, and
 // the editor waits on it, so it is looked for often (a listing costs next to nothing).
-const engineCopy = async ($: EngineInterface, n: number) => {
-  const { os, tmp, session } = await setUp($)
+const engineCopy = async ($: EngineInterface, n: number, at: Conversation) => {
+  const { os, tmp } = await setUp($)
   for (let attempt = 0; attempt < 120; attempt++) {
-    images ??= await imagesOf($, os, tmp, session)
-    if (images !== undefined) {
-      const entry = (await $.fs.list(images).catch(() => [])).find(e => new RegExp(`^${n}\\.[a-z]+$`).test(e.name))
-      if (entry !== undefined) return join(os, images, entry.name)
+    at.images ??= await imagesOf($, os, tmp, at.session)
+    if (at.images !== undefined) {
+      const entry = (await $.fs.list(at.images).catch(() => [])).find(e => new RegExp(`^${n}\\.[a-z]+$`).test(e.name))
+      if (entry !== undefined) return join(os, at.images, entry.name)
     }
     await $.clock.sleep(25)
   }
@@ -171,9 +227,9 @@ const imagesOf = async ($: EngineInterface, os: Os, tmp: string, session: string
 
 // Only where Claude Code kept no copy: the clipboard still holds what was just pasted.
 // Where no tool to read it is there at all, the person is told once what to install.
-const clipboardCopy = async ($: EngineInterface, n: number) => {
-  const { os, edits, env } = await setUp($)
-  const file = join(os, edits, `${n}.paste.png`)
+const clipboardCopy = async ($: EngineInterface, n: number, at: Conversation) => {
+  const { os, env } = await setUp($)
+  const file = join(os, at.edits, `${n}.paste.png`)
   const steps = clipboardSteps(os, file, env)
   let missing = 0
   for (const step of steps) {
@@ -206,8 +262,9 @@ type Look = { width: number; height: number; thumb: string; isLarge: boolean }
 // the size is read from the file's header and the band draws the picture itself, the
 // terminal scaling it: as bytes up to 2 MiB, by its name past that. An edit made in the
 // browser comes with its own small copy, which stands in for it.
-const look = async ($: EngineInterface, n: number, file: string, small?: string): Promise<Look | undefined> => {
-  const { os, edits } = await setUp($)
+const look = async ($: EngineInterface, n: number, at: Conversation, file: string, small?: string): Promise<Look | undefined> => {
+  const { os } = await setUp($)
+  const { edits } = at
   if (os === 'mac') {
     const info = await $.process.run(['sips', '-g', 'pixelWidth', '-g', 'pixelHeight', file])
     const width = Number(/pixelWidth: (\d+)/.exec(info.stdout)?.[1] ?? 0)
@@ -227,17 +284,28 @@ const look = async ($: EngineInterface, n: number, file: string, small?: string)
   return { width: seen.width, height: seen.height, thumb: seen.isPng ? file : '', isLarge: size > DRAWABLE }
 }
 
-const refresh = async ($: EngineInterface, n: number, file: string, isEdited: boolean, small?: string) => {
-  const seen = file === '' ? undefined : await look($, n, file, small).catch(() => undefined)
-  await update($, shots, list => {
-    const was = list.find(s => s.n === n)
-    const gen = (was?.gen ?? -1) + 1
-    const shot: Shot = seen === undefined
-      ? { n, file: '', thumb: '', gen, width: 0, height: 0, isEdited, ratio: 0, isLarge: false }
-      : { n, file, thumb: seen.thumb, gen, width: seen.width, height: seen.height, isEdited, ratio: isEdited && was !== undefined ? was.ratio : seen.width / seen.height, isLarge: seen.isLarge }
-    return [...list.filter(s => s.n !== n), shot]
+// Paste N as it now is, for the conversation it was pasted in. An edit that finishes
+// after the number went to another conversation's paste is that one's no longer.
+const refresh = async ($: EngineInterface, n: number, at: Conversation, file: string, isEdited: boolean, small?: string) => {
+  const seen = file === '' ? undefined : await look($, n, at, file, small).catch(() => undefined)
+  const { session } = at
+  await update($, { ...SHOT, id: String(n) }, held => {
+    if (isEdited && held !== undefined && held.session !== session) return held
+    const was = held?.session === session ? held : undefined
+    const gen = (held?.gen ?? -1) + 1
+    return seen === undefined
+      ? { n, file: '', thumb: '', gen, width: 0, height: 0, isEdited, ratio: 0, isLarge: false, session }
+      : { n, file, thumb: seen.thumb, gen, width: seen.width, height: seen.height, isEdited, ratio: isEdited && was !== undefined ? was.ratio : seen.width / seen.height, isLarge: seen.isLarge, session }
   })
-  return seen !== undefined
+  known.add(`${session}:${n}`)
+}
+
+// The pictures of these numbers pasted in this conversation, in that order. A number the
+// process gave a picture in another conversation is not this one's.
+const shotsOf = async ($: EngineInterface, ns: readonly number[], session: string | undefined) => {
+  if (session === undefined) return []
+  const held = await Promise.all(ns.map(n => read($, { ...SHOT, id: String(n) })))
+  return held.filter((s): s is Shot => s !== undefined && s.session === session)
 }
 
 // The panel kept warm (macOS): started with the session, and again on the next keystroke
@@ -249,9 +317,11 @@ type Warm = { requests: string; waiting: Map<string, (word: string) => void>; is
 
 const keepWarm = ($: EngineInterface) => {
   warm ??= (async () => {
-    const { os, edits, panel } = await setUp($)
+    const { os, panel } = await setUp($)
     if (os !== 'mac' || panel === undefined) return undefined
-    const requests = `${edits}/requests`
+    // Each request names its picture and its output in full, so the folder of the
+    // conversation the panel started in serves the next ones too.
+    const requests = `${(await lastConversation($)).edits}/requests`
     await $.process.run(['mkdir', '-p', requests])
     const held: Warm = { requests, waiting: new Map(), isUsed: false }
     const mine = warm
@@ -276,7 +346,11 @@ const keepWarm = ($: EngineInterface) => {
       for (const done of held.waiting.values()) done('GONE')
     })()
     return held
-  })().catch(() => undefined)
+  })().catch(() => {
+    // A set-up that failed: asked again with the next edit.
+    warm = undefined
+    return undefined
+  })
   return warm
 }
 
@@ -292,12 +366,12 @@ const editWarm = async ($: EngineInterface, file: string, out: string, label: st
   return word === 'GONE' ? undefined : word
 }
 
-const edit = async ($: EngineInterface, n: number, file?: string) => {
-  const picture = file ?? (await read($, shots)).find(s => s.n === n)?.file
+const edit = async ($: EngineInterface, n: number, at: Conversation, file?: string) => {
+  const picture = file ?? (await read($, { ...SHOT, id: String(n) }))?.file
   if (picture === undefined || picture === '') return
-  const { os, edits: at, terminal, panel } = await setUp($)
+  const { os, terminal, panel } = await setUp($)
   const words = WORDS[lang]
-  const out = join(os, at, `${n}.png`)
+  const out = join(os, at.edits, `${n}.png`)
   let said = (await editWarm($, picture, out, `Image #${n}`).catch(() => undefined)) ?? ''
   if (said === '') {
     const argv = editorArgv(os, { root: $.plugin.root, panel, file: picture, out, label: `Image #${n}`, terminal, lang })
@@ -312,32 +386,42 @@ const edit = async ($: EngineInterface, n: number, file?: string) => {
   }
   // The browser editor says when no window could be opened for it.
   if (said.includes('UNOPENED')) $.ui.toast(words.noBrowser)
-  if (said.includes('SAVED')) await refresh($, n, out, true, panel === undefined ? thumbOf(out) : undefined)
+  if (said.includes('SAVED')) await refresh($, n, at, out, true, panel === undefined ? thumbOf(out) : undefined)
 }
 
-// One editor at a time: three pastes in a row open one after another.
-const enqueue = ($: EngineInterface, n: number, file?: string) => {
-  queue = queue.then(() => edit($, n, file)).catch(() => undefined)
+// One editor at a time: three pastes in a row open one after another. Each edit is the
+// conversation's it was asked in: the paste's, or the band's when Edit was pressed.
+const enqueue = ($: EngineInterface, n: number, at: Conversation, file?: string) => {
+  queue = queue.then(() => edit($, n, at, file)).catch(() => undefined)
 }
 
 // The editor opens on the file as soon as it is found; the band's thumbnail is made
-// beside it, not before it.
+// beside it, not before it. The conversation is asked again as the paste lands, so a
+// paste after /clear or /resume is looked for in that conversation's folder.
 const capture = async ($: EngineInterface, n: number) => {
-  const file = (await engineCopy($, n)) ?? (await clipboardCopy($, n)) ?? ''
-  if (file !== '') enqueue($, n, file)
-  await refresh($, n, file, false)
+  const at = await conversationNow($)
+  const file = (await engineCopy($, n, at)) ?? (await clipboardCopy($, n, at)) ?? ''
+  if (file !== '') enqueue($, n, at, file)
+  await refresh($, n, at, file, false)
 }
 
-// Numbers run up through a session (#1, #3, #10), so a known N is the same picture coming
-// back (undo, a recalled prompt) and only an unknown one is a new paste.
+// Within a conversation a known N is the same picture coming back (undo, a recalled
+// prompt), and only an unknown one is a new paste.
 const sync = async ($: EngineInterface, text: string) => {
-  await setUp($)
   const ns = numbersIn(text)
   if (!isSame(ns, await read($, inBox))) await update($, inBox, () => ns)
-  const known = await read($, shots)
+  if (ns.length === 0) return
+  const { session } = await lastConversation($)
   for (const n of ns) {
-    if (capturing.has(n) || known.some(s => s.n === n)) continue
+    if (capturing.has(n) || known.has(`${session}:${n}`)) continue
+    // Claimed before the read, so a second look meanwhile does not look for it too; a
+    // read that fails is taken as unknown, and the paste looked for.
     capturing.add(n)
+    if ((await read($, { ...SHOT, id: String(n) }).catch(() => undefined))?.session === session) {
+      known.add(`${session}:${n}`)
+      capturing.delete(n)
+      continue
+    }
     void capture($, n).finally(() => capturing.delete(n))
   }
 }
@@ -346,22 +430,47 @@ const tick = async ($: EngineInterface) => {
   if (isTicking) return
   isTicking = true
   try {
+    // Notices a /clear or /resume within half a second, before the next paste needs it.
+    await conversationNow($)
     await sync($, (await $.prompt.read()).text)
   } finally {
     isTicking = false
   }
 }
 
+// The half-second look at the box, and the warm panel, from whichever comes first: a
+// session's start, or the first edit of the box where no start reached the mod.
+const start = ($: EngineInterface) => {
+  if (isStarted) return
+  isStarted = true
+  void setUp($).then(() => keepWarm($)).catch(() => undefined)
+  $.clock.every(500, () => void tick($).catch(() => undefined))
+}
+
 // What an Image draws: the thumbnail's bytes, read once per version, or for a picture
 // past what bytes may carry (2 MiB), its file's name, which the terminal reads itself.
 const picture = async ($: EngineInterface, shot: Shot): Promise<ImageSource> => {
   if (shot.isLarge) return { file: shot.thumb, format: 'png', generation: shot.gen }
-  const at = `${shot.thumb}:${shot.gen}`
-  const held = thumbs.get(at)
-  if (held !== undefined) return { png: held }
-  const { base64 } = await $.fs.read(shot.thumb, { as: 'bytes' })
-  thumbs.set(at, base64)
-  return { png: base64 }
+  const held = thumbs.get(shot.thumb)
+  if (held !== undefined) {
+    thumbs.delete(shot.thumb)
+    thumbsHeld -= held.png.length
+  }
+  const png = held !== undefined && held.gen === shot.gen ? held.png : (await $.fs.read(shot.thumb, { as: 'bytes' })).base64
+  // Another drawing may have read and kept it meanwhile: it is counted once.
+  const raced = thumbs.get(shot.thumb)
+  if (raced !== undefined) {
+    thumbs.delete(shot.thumb)
+    thumbsHeld -= raced.png.length
+  }
+  thumbs.set(shot.thumb, { gen: shot.gen, png })
+  thumbsHeld += png.length
+  for (const [file, kept] of thumbs) {
+    if (thumbsHeld <= THUMBS_BYTES || file === shot.thumb) break
+    thumbs.delete(file)
+    thumbsHeld -= kept.png.length
+  }
+  return { png }
 }
 
 // The engine refuses a drawn tree past 2 MiB of Image source in all, and off macOS a
@@ -439,16 +548,25 @@ export const dropOriginals = <B extends { type: string; [field: string]: unknown
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    void setUp($).then(() => keepWarm($)).catch(() => undefined)
-    $.clock.every(500, () => void tick($).catch(() => undefined))
+    start($)
     return next(e)
   })
 
   on('prompt.edit', async ($, e, next) => {
     const box = await next(e)
+    start($)
     void keepWarm($)
     // Only the band's list is awaited; finding the picture runs on behind it.
     await sync($, box.text).catch(() => undefined)
+    return box
+  })
+
+  // The box changed with no edit to carry it (a recalled prompt, an undo, a draft put
+  // back): the band follows at once rather than at the next half-second look.
+  on('prompt.change', async ($, e, next) => {
+    const box = await next(e)
+    start($)
+    void sync($, e.text).catch(() => undefined)
     return box
   })
 
@@ -456,7 +574,7 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     toDrop = []
     const ns = numbersIn(e.text)
-    const edited = (await read($, shots)).filter(s => s.isEdited && s.file !== '' && ns.includes(s.n))
+    const edited = (await shotsOf($, ns, await sessionOf($))).filter(s => s.isEdited && s.file !== '')
     if (edited.length === 0) return next(e)
     const ranks = [...ns].sort((a, b) => a - b)
     toDrop = edited.map(s => ({ n: s.n, rank: ranks.indexOf(s.n), ratio: s.ratio }))
@@ -479,8 +597,7 @@ export const register: Register = on => {
     if (e.surface !== 'terminal' || e.props.isExpanded) return next(e)
     const ns = numbersIn(e.props.text)
     if (ns.length === 0) return next(e)
-    const all = await read($, shots)
-    const drawn = ns.flatMap(n => all.filter(s => s.n === n && s.thumb !== ''))
+    const drawn = (await shotsOf($, ns, await sessionOf($))).filter(s => s.thumb !== '')
     if (drawn.length === 0) return next(e)
     const { Box, Text, Image } = $.ui.resolve(e)
     const columns = e.viewport?.columns ?? 80
@@ -513,10 +630,13 @@ export const register: Register = on => {
     if (e.surface !== 'terminal' || e.props.hasSurvey) return next(e)
     const ns = await read($, inBox)
     if (ns.length === 0) return next(e)
-    const all = await read($, shots)
+    const all = await shotsOf($, ns, await sessionOf($))
     const { Box, Text, Button, Image } = $.ui.resolve(e)
+    // Folded away by the person (newer Claude Code), nothing of the band is on screen:
+    // its names stand in, and no picture is read for it.
+    const isFolded = 'isCollapsed' in e.props && e.props.isCollapsed === true
     // A number whose copy is still being found shows as #N alone until it lands.
-    const drawn = ns.flatMap(n => all.filter(s => s.n === n && s.thumb !== ''))
+    const drawn = isFolded ? [] : all.filter(s => s.thumb !== '')
     const sizes = fit(drawn, e.props.bodyColumns, bandRows(e.viewport?.rows))
     const pictures = await picturesOf($, drawn)
 
@@ -535,7 +655,7 @@ export const register: Register = on => {
               )}
               <Box flexDirection="row" columnGap={1}>
                 <Text key={`name-${n}`} dimColor>Image #{n}{shot?.isEdited ? ` ${WORDS[lang].edited}` : ''}</Text>
-                {shot !== undefined && shot.file !== '' && <Button key={`edit-${n}`} label={WORDS[lang].edit} plain {...hotkey} onPress={() => enqueue($, n)} />}
+                {shot !== undefined && shot.file !== '' && <Button key={`edit-${n}`} label={WORDS[lang].edit} plain {...hotkey} onPress={() => conversationNow($).then(at => enqueue($, n, at)).catch(() => undefined)} />}
               </Box>
             </Box>
           )

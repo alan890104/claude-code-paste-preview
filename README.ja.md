@@ -62,7 +62,7 @@ https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 ## 仕組み
 
 - Claude Code は、貼り付けのたびに画像を `<tmp>/claude-<uid>/<project>/<session>/images/<N>.png` に保存します（`<tmp>` は macOS では `/tmp`、Linux では `$TMPDIR` または `/tmp`）。Windows では `%TEMP%\claude\<project>\<session>\images\<N>.png` です。どの OS でも、`CLAUDE_CODE_TMPDIR` で場所を変えられます。mod はこのコピーを読むので、サムネイルとエディタには、貼り付けたとおりの画像が表示されます。このフォルダは Claude Code の内部的な配置であって、API ではありません。場所が変わった場合、mod はクリップボードを読む方式に切り替わります。
-- 編集した画像は、macOS では `/private/tmp/paste-preview/<session>/<N>.png`、Linux では `/tmp/paste-preview-<uid>/<session>/<N>.png`（自分だけが読めるフォルダ）、Windows では `%TEMP%\paste-preview\<session>\<N>.png` に書き込まれます。1 週間より古いフォルダは削除されます。
+- 編集した画像は、macOS では `$TMPDIR/paste-preview/<session>/<N>.png`、Linux では `/tmp/paste-preview-<uid>/<session>/<N>.png`（どちらも自分だけが読めるフォルダ）、Windows では `%TEMP%\paste-preview\<session>\<N>.png` に書き込まれます。1 週間より古いフォルダは削除されます。
 - Linux と Windows には、どのシステムにも入っているサムネイル作成ツールがありません。そのため、サムネイルの帯は画像のヘッダからサイズを読み取り、画像の縮小はターミナルに任せます。編集した画像は、エディタから帯用の 480 px のコピーと一緒に戻ってきます。
 - プラグインはメッセージ内の画像を変更したり追加したりできず、取り除くことしかできません。そのため Enter を押した時点で、mod は元の貼り付け画像の image block を取り除き（`session.append`）、入力欄の隣に、編集後のファイルを示す Claude 向けのメモ（`prompt.submit` の context）を付け加えます。Claude はそのファイルを読みます。この読み込みは会話履歴に表示されます。入力欄と会話履歴には、引き続き `[Image #N]` と表示されます。
 - 正しい block を見つけるために、mod はメッセージ内での画像の位置とアスペクト比を調べます。どちらも一致しない場合は、何も取り除きません。その場合、Claude には元の画像と編集後の画像の両方が渡されますが、別の画像を取り除いてしまうことはありません。

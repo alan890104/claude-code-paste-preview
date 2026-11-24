@@ -9,6 +9,7 @@ export type Os = 'mac' | 'linux' | 'windows'
 
 // The variables the mod reads; each is passed in, since only the hooks can ask for them.
 export type Env = {
+  HOME?: string
   CLAUDE_CODE_TMPDIR?: string
   TMPDIR?: string
   TMP?: string
@@ -51,11 +52,19 @@ export const engineRoot = (os: Os, env: Env, uid: string) =>
     ? join(os, env.CLAUDE_CODE_TMPDIR || windowsTemp(env), 'claude')
     : join(os, env.CLAUDE_CODE_TMPDIR || (os === 'mac' ? '/tmp' : posixTemp(env)), `claude-${uid}`)
 
-// Where the mod writes edited pictures. On Linux a folder of the user's own, made 0700,
-// since /tmp is shared and an edit is often a screenshot; Windows' temp folder is
-// already the user's.
-export const editsRoot = (os: Os, env: Env, uid: string) =>
-  os === 'mac' ? '/private/tmp/paste-preview' : os === 'windows' ? join(os, windowsTemp(env), 'paste-preview') : join(os, posixTemp(env), `paste-preview-${uid}`)
+// Where the mod writes edited pictures, and on macOS builds its panel. A folder only the
+// user can write to: an edit is often a screenshot, and on macOS the panel binary found
+// there is run. In /tmp, shared by every account, another user could leave a folder and
+// a binary there first. macOS gives each user a temp folder of their own, which the mod
+// asks it for (`userTemp`, from getconf: TMPDIR may point anywhere), else the caches in
+// their home. Elsewhere a folder of the user's own in the temp folder, made 0700;
+// Windows' temp folder is already the user's.
+export const editsRoot = (os: Os, env: Env, uid: string, userTemp?: string) => {
+  if (os === 'windows') return join(os, windowsTemp(env), 'paste-preview')
+  if (os === 'mac' && userTemp) return join(os, userTemp.replace(/(.)\/+$/, '$1'), 'paste-preview')
+  if (os === 'mac' && env.HOME) return join(os, env.HOME, 'Library', 'Caches', 'paste-preview')
+  return join(os, posixTemp(env), `paste-preview-${uid}`)
+}
 
 // What Claude Code runs for an image on the clipboard, to a file: pngpaste on macOS (the
 // mod's own choice there); on Linux wl-paste for Wayland and xclip for X11, the session's

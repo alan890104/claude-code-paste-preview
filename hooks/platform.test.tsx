@@ -40,11 +40,12 @@ type System = {
 const SYSTEMS: Record<Os, System> = {
   mac: {
     os: 'mac',
-    env: { TERM_PROGRAM: 'ghostty', TMPDIR: '/var/folders/xy/T/' },
+    // TMPDIR set to the shared /tmp, as a person may: the mod asks macOS for the user's own.
+    env: { TERM_PROGRAM: 'ghostty', TMPDIR: '/tmp/' },
     engineRoot: '/private/tmp/claude-501',
-    edits: '/private/tmp/paste-preview/abcdef12',
-    editor: (root, file, out) => ['/private/tmp/paste-preview/bin/panel', `${root}/editor/editor.html`, file, out, 'Image #1', 'zh-Hant'],
-    warm: root => ['/private/tmp/paste-preview/bin/panel', 'serve', `${root}/editor/editor.html`, '/private/tmp/paste-preview/abcdef12/requests', 'zh-Hant'],
+    edits: '/var/folders/xy/T/paste-preview/abcdef12',
+    editor: (root, file, out) => ['/var/folders/xy/T/paste-preview/bin/panel', `${root}/editor/editor.html`, file, out, 'Image #1', 'zh-Hant'],
+    warm: root => ['/var/folders/xy/T/paste-preview/bin/panel', 'serve', `${root}/editor/editor.html`, '/var/folders/xy/T/paste-preview/abcdef12/requests', 'zh-Hant'],
   },
   linux: {
     os: 'linux',
@@ -64,6 +65,9 @@ const SYSTEMS: Record<Os, System> = {
 
 type World = {
   runs: string[][]
+  runTimeouts: (number | undefined)[]
+  // Commands and file writes, in the order the mod made them.
+  acts: string[]
   runEnvs: Record<string, string>[]
   spawns: string[][]
   toasts: string[]
@@ -79,8 +83,8 @@ const canon = (path: string) => path.replace(/\\/g, '/').replace(/^.*?([A-Za-z]:
 
 // The system beneath the mod: its variables, its commands and its files. `copy` is where
 // Claude Code kept the paste (absent: it kept none); `say` what the editor prints.
-const world = (on: On, system: System, options: { copy?: boolean; say?: string; tools?: Record<string, Answer>; pasteSize?: number; spawnFails?: boolean; warmFails?: boolean; culture?: string } = {}) => {
-  const w: World = { runs: [], runEnvs: [], spawns: [], toasts: [], files: new Map(), dirs: new Map(), context: [] }
+const world = (on: On, system: System, options: { copy?: boolean; say?: string; tools?: Record<string, Answer>; pasteSize?: number; spawnFails?: boolean; warmFails?: boolean; culture?: string; session?: () => string; hold?: Promise<void>; says?: string[]; holdSweep?: Promise<void>; fails?: string[] } = {}) => {
+  const w: World = { runs: [], runTimeouts: [], acts: [], runEnvs: [], spawns: [], toasts: [], files: new Map(), dirs: new Map(), context: [] }
   const file = (path: string, size: number, bytes?: Uint8Array, text?: string) => w.files.set(canon(path), { path, size, bytes, text })
   // The warm panel's requests, as the mod writes them, for the panel below to take.
   const requests: { id: string; text: string }[] = []
@@ -96,16 +100,26 @@ const world = (on: On, system: System, options: { copy?: boolean; say?: string; 
     file(pasted, options.pasteSize ?? 120_000, pngBytes(1600, 900))
   }
   mock.env(on, system.env)
-  on('session.id', () => ({ value: SESSION }))
+  // The conversation the process is in now: /clear and /resume change it under the mod.
+  on('session.id', () => ({ value: options.session?.() ?? SESSION }))
   on('ui.toast', ($, e) => {
     w.toasts.push(e.text)
     return { value: undefined }
   })
-  on('process.run', ($, e) => {
+  on('process.run', async ($, e) => {
     const argv = [...e.argv]
     w.runs.push(argv)
+    w.acts.push(`run ${argv.join(' ')}`)
     w.runEnvs.push({ ...e.init?.env })
+    w.runTimeouts.push(e.init?.timeoutMs)
     const line = argv.join(' ')
+    if (options.fails?.includes(line)) return { deny: `ENOENT: ${argv[0]}` }
+    if (line === 'touch' || argv[0] === 'touch') return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    // The week-old sweep, answered when the test lets it be.
+    if ((argv[0] === 'find' || argv.some(a => a.includes('Get-ChildItem'))) && options.holdSweep !== undefined) {
+      await options.holdSweep
+      w.acts.push('swept')
+    }
     const told = Object.entries(options.tools ?? {}).find(([command]) => line.includes(command))?.[1]
     if (told !== undefined) {
       // A clipboard tool that worked leaves the picture where it was told to.
@@ -114,14 +128,16 @@ const world = (on: On, system: System, options: { copy?: boolean; say?: string; 
       if (told.exitCode === 0 && /paste\.png$/.test(target)) file(target, 50_000, pngBytes(800, 600))
       return { value: { exitCode: told.exitCode, stdout: told.stdout ?? '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
-    const stdout = line === 'uname -s' ? (system.os === 'mac' ? 'Darwin' : 'Linux') : line === 'id -u' ? '501' : line.startsWith('defaults read') ? '(\n    "zh-Hant-TW",\n    en\n)' : line.includes(LANGUAGE_PS) ? (options.culture ?? 'zh-TW') : line.startsWith('sips -g') ? 'pixelWidth: 1600\n  pixelHeight: 900' : ''
+    const stdout = line === 'uname -s' ? (system.os === 'mac' ? 'Darwin' : 'Linux') : line === 'id -u' ? '501' : line === 'getconf DARWIN_USER_TEMP_DIR' ? '/var/folders/xy/T/\n' : line.startsWith('defaults read') ? '(\n    "zh-Hant-TW",\n    en\n)' : line.includes(LANGUAGE_PS) ? (options.culture ?? 'zh-TW') : line.startsWith('sips -g') ? 'pixelWidth: 1600\n  pixelHeight: 900' : ''
     if (line.startsWith('sips -s')) file(argv.at(-1) ?? '', 9000, pngBytes(480, 270))
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('process.spawn', async function* ($, e) {
     w.spawns.push([...e.argv])
     if (options.spawnFails) return { deny: 'ENOENT: no such file or directory' }
-    const word = options.say ?? 'SAVED'
+    // Each editor in turn answers the next of `says`, once the test lets it.
+    const word = e.argv[1] === 'serve' ? (options.say ?? 'SAVED') : (options.says?.[w.spawns.filter(a => a[1] !== 'serve').length - 1] ?? options.say ?? 'SAVED')
+    if (e.argv[1] !== 'serve') await options.hold
     // The warm panel: each request answered by a line naming it.
     if (e.argv[1] === 'serve') {
       if (options.warmFails) return { deny: 'the panel quit' }
@@ -156,6 +172,7 @@ const world = (on: On, system: System, options: { copy?: boolean; say?: string; 
   on('fs.list', ($, e) => ({ value: (w.dirs.get(canon(e.path))?.names ?? []).map(name => ({ name, kind: name.includes('.') ? ('file' as const) : ('dir' as const), size: 0, mtimeMs: 0, isLink: false })) }))
   on('fs.exists', ($, e) => ({ value: w.dirs.has(canon(e.path)) || w.files.has(canon(e.path)) }))
   on('fs.write', ($, e) => {
+    w.acts.push(`write ${e.path}`)
     file(e.path, e.text.length, undefined, e.text)
     const request = /[\\/]requests[\\/]([^\\/]+)\.json$/.exec(e.path)
     if (request !== null) {
@@ -175,7 +192,9 @@ const world = (on: On, system: System, options: { copy?: boolean; say?: string; 
   const box = { text: '' }
   on('prompt.read', () => ({ value: { text: box.text, cursor: box.text.length } }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  return { w, pasted, box }
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  on('prompt.change', ($, e) => ({ text: e.text }))
+  return { w, pasted, box, dir, file, project, sep }
 }
 
 // prompt.edit is the engine's alone to raise; the mod also reads the box on a timer,
@@ -194,7 +213,7 @@ const BAND = {
   plugin: 'paste-preview',
   component: 'AbovePrompt',
   surface: 'terminal',
-  props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 19 }, view: {} },
+  props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 19 }, view: {} },
   viewport: { columns: 105, rows: 46, isFullscreen: true },
 } as const
 
@@ -220,7 +239,8 @@ for (const os of ['mac', 'linux', 'windows'] as const) {
 
     // Where the mod made its folder, and how it clears old ones.
     if (os === 'windows') expect(w.files.has(canon(`${system.edits}\\.keep`))).toBe(true)
-    else expect(w.runs).toContainEqual(os === 'mac' ? ['mkdir', '-p', system.edits] : ['mkdir', '-p', '-m', '700', system.edits.replace(/\/abcdef12$/, ''), system.edits])
+    // Made for the user alone, on macOS as on Linux.
+    else expect(w.runs).toContainEqual(['mkdir', '-p', '-m', '700', system.edits.replace(/\/abcdef12$/, ''), system.edits])
     const sweep = w.runs.find(argv => argv.includes('find') || argv.some(a => a.includes('Get-ChildItem')))
     expect(sweep?.[0]).toBe(os === 'windows' ? 'powershell.exe' : 'find')
 
@@ -336,7 +356,12 @@ test('Claude Code’s temp folder and the edits folder, per system', async () =>
   expect(engineRoot('linux', {}, '1000')).toBe('/tmp/claude-1000')
   expect(engineRoot('windows', { TEMP: 'C:\\Users\\me\\AppData\\Local\\Temp\\' }, '')).toBe('C:\\Users\\me\\AppData\\Local\\Temp\\claude')
   expect(engineRoot('windows', { SystemRoot: 'C:\\Windows' }, '')).toBe('C:\\Windows\\temp\\claude')
-  expect(editsRoot('mac', {}, '501')).toBe('/private/tmp/paste-preview')
+  // macOS: the user's own temp folder, which no other account can write to. In /tmp,
+  // shared by every account, another user could leave a folder and a panel binary there
+  // before this one ran the mod, and the mod would run that binary.
+  expect(editsRoot('mac', { TMPDIR: '/tmp' }, '501', '/var/folders/x/T/')).toBe('/var/folders/x/T/paste-preview')
+  expect(editsRoot('mac', { TMPDIR: '/tmp', HOME: '/Users/me' }, '501')).toBe('/Users/me/Library/Caches/paste-preview')
+  expect(editsRoot('mac', {}, '501')).toBe('/tmp/paste-preview-501')
   expect(editsRoot('linux', {}, '1000')).toBe('/tmp/paste-preview-1000')
   expect(editsRoot('windows', { TMP: 'D:\\t' }, '')).toBe('D:\\t\\paste-preview')
   expect(join('windows', 'C:\\', 'claude')).toBe('C:\\claude')
@@ -451,3 +476,351 @@ test('a picture’s size from its first bytes', async () => {
   expect(sizeOf(new Uint8Array([1, 2, 3]))).toBeUndefined()
 })
 
+
+// What each editor was asked to open, on any system: a command of its own (Linux,
+// Windows, a Mac without the warm panel) or a request the warm panel takes (macOS).
+const asked = (w: World) => [
+  ...w.spawns.filter(argv => argv[1] !== 'serve').map(argv => ({ picture: argv[2] ?? '', out: argv[3] ?? '' })),
+  ...[...w.files.values()].filter(f => /[\\/]requests[\\/][^\\/]+\.json$/.test(f.path)).map(f => {
+    const { picture, out } = JSON.parse(f.text ?? '{}') as { picture: string; out: string }
+    return { picture, out }
+  }),
+]
+const OTHER = 'fedcba98-7654-3210-fedc-ba9876543210'
+const deferred = () => {
+  let release = () => {}
+  const promise = new Promise<void>(resolve => (release = resolve))
+  return { promise, release }
+}
+
+// /clear and /resume start another conversation in the same process, under another id
+// and with no session.start (issue #6): the next paste is in that conversation's folder.
+// Read from the old one's, the band waited three seconds and then fell back on the
+// clipboard, which a Mac without pngpaste cannot read: no thumbnail, no Edit button.
+// The mod is told of no change: whatever the engine raises around it, the conversation is
+// asked of the engine as the paste lands.
+for (const os of ['mac', 'linux', 'windows'] as const) {
+  {
+    test(`${os}: after /clear or /resume the paste is found where the new conversation keeps it`, async ($, on) => {
+      const clock = mock.clock(on)
+      const system = SYSTEMS[os]
+      let session = SESSION
+      const { w, box, dir, file, project, sep } = world(on, system, { session: () => session })
+      await paste($, box)
+      await until(clock, () => asked(w).length > 0)
+      expect(asked(w)[0]?.picture).toBe(`${project}${sep}${SESSION}${sep}images${sep}1.png`)
+
+      const images = `${project}${sep}${OTHER}${sep}images`
+      dir(images, ['2.png'])
+      file(`${images}${sep}2.png`, 120_000, pngBytes(1600, 900))
+      session = OTHER
+      box.text = '[Image #2] '
+      await until(clock, () => asked(w).length > 1)
+      expect(asked(w)[1]).toEqual({ picture: `${images}${sep}2.png`, out: `${system.edits.replace('abcdef12', 'fedcba98')}${sep}2.png` })
+      // Found at once: the clipboard was never read for it.
+      expect(w.runs.filter(argv => argv[0] === 'pngpaste' || argv[0] === 'sh' || argv.some(a => a.includes('Clipboard')))).toEqual([])
+    })
+  }
+}
+
+// An editor still open when the conversation changes: its edit is the conversation's it
+// was pasted in, and Enter there points Claude at it; the next conversation's prompt
+// does not.
+test('linux: an edit finished after /resume belongs to the conversation it was pasted in', async ($, on) => {
+  const clock = mock.clock(on)
+  let session = SESSION
+  const hold = deferred()
+  const { w, box, dir, file, project, sep } = world(on, SYSTEMS.linux, { session: () => session, hold: hold.promise })
+  await paste($, box)
+  await until(clock, () => asked(w).length > 0)
+  const images = `${project}${sep}${OTHER}${sep}images`
+  dir(images, ['2.png'])
+  file(`${images}${sep}2.png`, 120_000, pngBytes(1600, 900))
+  session = OTHER
+  await $.session.end({ reason: 'resume', sessionId: SESSION, resume: { id: SESSION } })
+  box.text = '[Image #2] '
+  await until(clock, () => false)
+  hold.release()
+  await until(clock, () => asked(w).length > 1)
+  await until(clock, () => false)
+
+  await $.prompt.submit({ text: '[Image #2] and this?', wait: false, origin: { kind: 'composer' } })
+  expect(w.context.some(note => note.includes('[Image #1]'))).toBe(false)
+  session = SESSION
+  await until(clock, () => false)
+  await $.prompt.submit({ text: '[Image #1] what is this?', wait: false, origin: { kind: 'composer' } })
+  expect(w.context.some(note => note.includes('/tmp/paste-preview-501/abcdef12/1.png'))).toBe(true)
+})
+
+// Should Claude Code ever number a paste of the new conversation as one of the old's,
+// the old conversation's edit, finishing late, does not become the new paste's.
+test('linux: a number used again in the next conversation is not given the last one\'s edit', async ($, on) => {
+  const clock = mock.clock(on)
+  let session = SESSION
+  const hold = deferred()
+  const { w, box, dir, file, project, sep } = world(on, SYSTEMS.linux, { session: () => session, hold: hold.promise, says: ['SAVED', 'CANCELLED'] })
+  await paste($, box)
+  await until(clock, () => asked(w).length > 0)
+  const images = `${project}${sep}${OTHER}${sep}images`
+  dir(images, ['1.png'])
+  file(`${images}${sep}1.png`, 120_000, pngBytes(1200, 900))
+  session = OTHER
+  await $.session.end({ reason: 'clear', sessionId: SESSION, resume: { id: SESSION } })
+  box.text = ''
+  await until(clock, () => false)
+  box.text = '[Image #1] '
+  await until(clock, () => false)
+  hold.release()
+  await until(clock, () => asked(w).length > 1)
+  await until(clock, () => false)
+  expect(asked(w)[1]?.picture).toBe(`${images}${sep}1.png`)
+
+  const band = await $.ui.mount({ ...BAND })
+  expect((await band.find({ type: 'Text', text: /^Image #1/ }))?.text).toBe('Image #1')
+  await band.unmount()
+  await $.prompt.submit({ text: '[Image #1] and this?', wait: false, origin: { kind: 'composer' } })
+  expect(w.context).toEqual([])
+})
+
+// Issue #6 as reported: a resumed session whose start never reached the mod. The first
+// change of the box starts it, and the half-second look follows from there.
+test('linux: with no session.start, the first change of the box starts the mod', async ($, on) => {
+  const clock = mock.clock(on)
+  const { w, box, pasted, dir, file, sep } = world(on, SYSTEMS.linux)
+  box.text = '[Image #1] '
+  // The kit raises prompt.change as the engine does, though its typings list only the
+  // prompt events a test usually raises.
+  const raise = $.prompt as unknown as { change: (e: { text: string; cursor: number; origin: { kind: 'engine' } }) => Promise<unknown> }
+  await raise.change({ text: box.text, cursor: box.text.length, origin: { kind: 'engine' } })
+  await until(clock, () => asked(w).length > 0)
+  expect(asked(w)[0]?.picture).toBe(pasted)
+  const images = pasted.slice(0, pasted.lastIndexOf(sep))
+  dir(images, ['1.png', '2.png'])
+  file(`${images}${sep}2.png`, 120_000, pngBytes(1200, 900))
+  box.text = '[Image #1] [Image #2] '
+  await until(clock, () => asked(w).length > 1)
+  expect(asked(w)[1]?.picture).toBe(`${images}${sep}2.png`)
+})
+
+// The week-old sweep runs as the process starts; a conversation resumed after a week has
+// a folder that old. Made before the sweep had finished, that folder was swept away
+// under it, and the edit had nowhere to be written.
+for (const os of ['mac', 'linux', 'windows'] as const) {
+  test(`${os}: a conversation's folder is made once the week-old sweep has finished`, async ($, on) => {
+    const clock = mock.clock(on)
+    const system = SYSTEMS[os]
+    const sweep = deferred()
+    const { w, box } = world(on, system, { holdSweep: sweep.promise })
+    await paste($, box)
+    for (let i = 0; i < 4; i++) await clock.advance(250)
+    sweep.release()
+    await until(clock, () => asked(w).length > 0)
+    const swept = w.acts.indexOf('swept')
+    const made = w.acts.findIndex(act => (act.startsWith('run mkdir') || act.startsWith('write ')) && act.includes(system.edits))
+    expect(swept).toBeGreaterThanOrEqual(0)
+    expect(made).toBeGreaterThan(swept)
+  })
+}
+
+// The sweep may take no longer than this: a stuck one is cut off and the paste goes on.
+test('the week-old sweep is given ten seconds at most', async ($, on) => {
+  const clock = mock.clock(on)
+  const { w, box } = world(on, SYSTEMS.linux)
+  await paste($, box)
+  await until(clock, () => asked(w).length > 0)
+  const at = w.runs.findIndex(argv => argv[0] === 'find')
+  expect(at).toBeGreaterThanOrEqual(0)
+  expect(w.runTimeouts[at]).toBe(10_000)
+})
+
+// Where the mod cannot set itself up (a command it needs is missing), it tries again now
+// and then, not twice a second for the rest of the session.
+test('linux: a set-up that failed is tried again after ten seconds, not on every look', async ($, on) => {
+  const clock = mock.clock(on)
+  const { w, box } = world(on, SYSTEMS.linux, { fails: ['id -u'] })
+  const tries = () => w.runs.filter(argv => argv.join(' ') === 'id -u').length
+  await paste($, box)
+  for (let i = 0; i < 32; i++) await clock.advance(250)
+  expect(tries()).toBe(1)
+  for (let i = 0; i < 24; i++) await clock.advance(250)
+  expect(tries()).toBe(2)
+  expect(asked(w)).toEqual([])
+})
+
+// Once it can, it does: the paste in the box is picked up, and on macOS the panel is
+// kept warm again.
+test('mac: a set-up that failed and then works keeps the panel warm', async ($, on) => {
+  const clock = mock.clock(on)
+  const fails = ['id -u']
+  const { w, box } = world(on, SYSTEMS.mac, { fails })
+  await paste($, box)
+  for (let i = 0; i < 8; i++) await clock.advance(250)
+  expect(w.spawns).toEqual([])
+  fails.length = 0
+  await until(clock, () => asked(w).length > 0)
+  expect(w.spawns.some(argv => argv[1] === 'serve')).toBe(true)
+  expect(asked(w)).toHaveLength(1)
+})
+
+const ROW = {
+  plugin: 'paste-preview',
+  surface: 'terminal',
+  component: 'UserMessage',
+  props: { text: '[Image #1] look', origin: { kind: 'composer' }, isExpanded: false },
+} as const
+
+// Every sent prompt with a picture read one list of all pastes, so each new paste drew
+// all of them again: the fifteenth paste of a session redrew thirteen rows. A row reads
+// the pictures it names and nothing else, so a paste of another number never draws it.
+test('a sent prompt reads only the pictures it names', async ($, on) => {
+  const clock = mock.clock(on)
+  const { w, box, pasted, dir, file, sep } = world(on, SYSTEMS.linux)
+  // What the row reads while it is drawn: what a later write draws it again for.
+  let reads: string[] | undefined
+  on('state.get', ($, e, next) => {
+    reads?.push(e.id === undefined ? e.key : `${e.key}:${e.id}`)
+    return next(e)
+  })
+  await paste($, box)
+  await until(clock, () => w.spawns.length > 0)
+  const images = pasted.slice(0, pasted.lastIndexOf(sep))
+  dir(images, ['1.png', '2.png', '3.png'])
+  for (const n of [2, 3]) file(`${images}${sep}${n}.png`, 120_000, pngBytes(1200, 900))
+  box.text = '[Image #1] [Image #2] [Image #3] '
+  await until(clock, () => w.spawns.length > 2)
+  await until(clock, () => false)
+
+  reads = []
+  const row = await $.ui.mount({ ...ROW, requestId: 'row-1', props: { ...ROW.props, text: '[Image #3] and [Image #1]' } })
+  expect(reads.sort()).toEqual(['shot:1', 'shot:3'])
+  reads = undefined
+  // Drawn in the order the text names them.
+  expect((await row.findAll({ type: 'Text', text: /^Image #\d/ })).map(t => t.text)).toEqual(['Image #3 edited', 'Image #1 edited'])
+  expect(await row.findAll({ type: 'Image' })).toHaveLength(2)
+  await row.unmount()
+})
+
+// A conversation resumed after /clear or /resume shows its own sent prompts: a number
+// the process gave a picture in another conversation is not theirs to show.
+test('a sent prompt of another conversation is not given this one\'s picture', async ($, on) => {
+  const clock = mock.clock(on)
+  let session = SESSION
+  const { w, box } = world(on, SYSTEMS.linux, { session: () => session })
+  await paste($, box)
+  await until(clock, () => w.spawns.length > 0)
+  await until(clock, () => false)
+  const here = await $.ui.mount({ ...ROW, requestId: 'row-here' })
+  expect(await here.find({ type: 'Image' })).toBeDefined()
+  await here.unmount()
+
+  session = 'fedcba98-7654-3210-fedc-ba9876543210'
+  await $.session.end({ reason: 'resume', sessionId: SESSION, resume: { id: SESSION } })
+  const other = await $.ui.mount({ ...ROW, requestId: 'row-there', props: { ...ROW.props, text: '[Image #1] from that conversation' } })
+  expect(await other.find({ type: 'Image' })).toBeUndefined()
+  await other.unmount()
+})
+
+// The full view (ctrl+o) is Claude Code's own row, pictures or not.
+test('a sent prompt keeps Claude Code\'s row in the full view', async ($, on) => {
+  const clock = mock.clock(on)
+  const { w, box } = world(on, SYSTEMS.linux)
+  await paste($, box)
+  await until(clock, () => w.spawns.length > 0)
+  await until(clock, () => false)
+  const row = await $.ui.mount({ ...ROW, requestId: 'row', props: { ...ROW.props, isExpanded: true } })
+  expect(await row.find({ type: 'Image' })).toBeUndefined()
+  await row.unmount()
+})
+
+// The same paste seen twice at once (two changes of the box, or one and the half-second
+// look) opens one editor.
+test('linux: a paste seen by two looks at once opens one editor', async ($, on) => {
+  const clock = mock.clock(on)
+  const { w, box } = world(on, SYSTEMS.linux)
+  await $.session.start({ cwd: '/home/me/project', surface: 'terminal', isInteractive: true })
+  await clock.advance(250)
+  box.text = '[Image #1] '
+  const raise = $.prompt as unknown as { change: (e: { text: string; cursor: number; origin: { kind: 'engine' } }) => Promise<unknown> }
+  await Promise.all([raise.change({ text: box.text, cursor: 1, origin: { kind: 'engine' } }), raise.change({ text: box.text, cursor: 1, origin: { kind: 'engine' } })])
+  await until(clock, () => false)
+  expect(asked(w)).toHaveLength(1)
+})
+
+// Pasted within half a second of /clear, before the mod has looked again: still one
+// editor, on the new conversation's copy, which lands a moment later.
+test('linux: a paste right after /clear opens one editor', async ($, on) => {
+  const clock = mock.clock(on)
+  let session = SESSION
+  const { w, box, dir, file, project, sep } = world(on, SYSTEMS.linux, { session: () => session })
+  await paste($, box)
+  await until(clock, () => asked(w).length > 0)
+  await until(clock, () => false)
+  session = OTHER
+  box.text = '[Image #2] '
+  const raise = $.prompt as unknown as { change: (e: { text: string; cursor: number; origin: { kind: 'engine' } }) => Promise<unknown> }
+  await raise.change({ text: box.text, cursor: 1, origin: { kind: 'engine' } })
+  const images = `${project}${sep}${OTHER}${sep}images`
+  dir(images, [])
+  for (let i = 0; i < 30; i++) await clock.advance(25)
+  dir(images, ['2.png'])
+  file(`${images}${sep}2.png`, 120_000, pngBytes(1600, 900))
+  await until(clock, () => false)
+  expect(asked(w).slice(1)).toEqual([{ picture: `${images}${sep}2.png`, out: '/tmp/paste-preview-501/fedcba98/2.png' }])
+})
+
+// Edit pressed in the band, its editor queued behind another, and the conversation
+// changes before it opens: the edit is the conversation's the button was pressed in.
+test('linux: Edit belongs to the conversation it was pressed in', async ($, on) => {
+  const clock = mock.clock(on)
+  let session = SESSION
+  const hold = deferred()
+  const { w, box } = world(on, SYSTEMS.linux, { session: () => session, hold: hold.promise })
+  await paste($, box)
+  await until(clock, () => asked(w).length > 0)
+  const band = await $.ui.mount({ ...BAND })
+  await band.press({ key: 'edit-1' })
+  await band.unmount()
+  session = OTHER
+  box.text = ''
+  await until(clock, () => false)
+  hold.release()
+  await until(clock, () => asked(w).length > 1)
+  expect(asked(w)[1]?.out).toBe('/tmp/paste-preview-501/abcdef12/1.png')
+})
+
+// The working folder: made for the user alone before anything is put in it, and a
+// resumed conversation's folder marked as in use, so a sweep elsewhere leaves it.
+for (const os of ['mac', 'linux'] as const) {
+  test(`${os}: the working folder is the user's alone from the start, and a conversation's is marked in use`, async ($, on) => {
+    const clock = mock.clock(on)
+    const system = SYSTEMS[os]
+    const { w, box } = world(on, system)
+    await paste($, box)
+    await until(clock, () => asked(w).length > 0)
+    const root = system.edits.replace(/\/abcdef12$/, '')
+    const first = w.acts.findIndex(act => act.includes(root))
+    expect(w.acts[first]).toBe(`run mkdir -p -m 700 ${root}`)
+    const made = w.acts.indexOf(`run mkdir -p -m 700 ${root} ${system.edits}`)
+    expect(made).toBeGreaterThan(first)
+    expect(w.acts.indexOf(`run touch ${system.edits}`)).toBeGreaterThan(made)
+  })
+}
+
+// A read of state that fails once (the host busy) does not lose the paste: the next look
+// picks it up.
+test('linux: a paste whose state could not be read once is still picked up', async ($, on) => {
+  const clock = mock.clock(on)
+  let refused = 0
+  on('state.get', ($, e, next) => {
+    if (e.key === 'shot' && refused === 0) {
+      refused += 1
+      return { deny: 'the host is busy' }
+    }
+    return next(e)
+  })
+  const { w, box } = world(on, SYSTEMS.linux)
+  await paste($, box)
+  await until(clock, () => asked(w).length > 0)
+  expect(refused).toBe(1)
+  expect(asked(w)).toHaveLength(1)
+})

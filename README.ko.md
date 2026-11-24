@@ -62,7 +62,7 @@ https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 ## 동작 방식
 
 - Claude Code는 붙여넣을 때마다 이미지를 `<tmp>/claude-<uid>/<project>/<session>/images/<N>.png`에 저장합니다(`<tmp>`는 macOS에서는 `/tmp`, Linux에서는 `$TMPDIR` 또는 `/tmp`). Windows에서는 `%TEMP%\claude\<project>\<session>\images\<N>.png`이며, 세 운영체제 모두 `CLAUDE_CODE_TMPDIR`로 위치를 바꿀 수 있습니다. mod는 이 사본을 읽기 때문에, 썸네일과 편집기에는 붙여넣은 이미지가 그대로 표시됩니다. 이 폴더는 Claude Code 내부의 구조일 뿐 API가 아닙니다. 위치가 바뀌면 mod는 클립보드를 읽는 방식으로 대체합니다.
-- 편집한 이미지는 macOS에서는 `/private/tmp/paste-preview/<session>/<N>.png`에, Linux에서는 `/tmp/paste-preview-<uid>/<session>/<N>.png`(본인만 읽을 수 있는 폴더)에, Windows에서는 `%TEMP%\paste-preview\<session>\<N>.png`에 저장됩니다. 일주일이 지난 폴더는 삭제됩니다.
+- 편집한 이미지는 macOS에서는 `$TMPDIR/paste-preview/<session>/<N>.png`에, Linux에서는 `/tmp/paste-preview-<uid>/<session>/<N>.png`(둘 다 본인만 읽을 수 있는 폴더)에, Windows에서는 `%TEMP%\paste-preview\<session>\<N>.png`에 저장됩니다. 일주일이 지난 폴더는 삭제됩니다.
 - Linux와 Windows에는 모든 시스템에 기본으로 들어 있는 썸네일 생성 도구가 없습니다. 그래서 썸네일 띠는 이미지 헤더에서 크기를 읽고, 이미지 축소는 터미널이 직접 처리합니다. 편집한 이미지는 편집기에서 띠에 쓸 480 px 사본과 함께 돌아옵니다.
 - 플러그인은 메시지 안의 이미지를 바꾸거나 추가할 수 없고, 제거만 할 수 있습니다. 그래서 Enter를 누르는 시점에 mod는 원본 붙여넣기의 image block을 제거하고(`session.append`), 입력 내용 옆에 편집된 파일을 알려 주는 Claude용 메모(`prompt.submit` context)를 덧붙입니다. Claude는 그 파일을 읽습니다. 이 읽기는 대화 기록에서 볼 수 있습니다. 입력창과 대화 기록에는 계속 `[Image #N]`이 표시됩니다.
 - 올바른 block을 찾기 위해 mod는 메시지 안에서 이미지의 위치와 가로세로 비율을 확인합니다. 둘 다 맞지 않으면 아무것도 제거하지 않습니다. 그러면 Claude는 원본과 편집본을 모두 받게 되고, 엉뚱한 이미지가 제거되는 일은 없습니다.

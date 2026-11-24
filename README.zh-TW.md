@@ -62,7 +62,7 @@ https://github.com/user-attachments/assets/d68fe9a9-9179-4e3e-868f-2049647287cb
 ## 運作原理
 
 - Claude Code 會把每次貼上的圖存到 `<tmp>/claude-<uid>/<project>/<session>/images/<N>.png`（`<tmp>` 在 macOS 是 `/tmp`，在 Linux 是 `$TMPDIR` 或 `/tmp`），Windows 上是 `%TEMP%\claude\<project>\<session>\images\<N>.png`；三個系統都可以用 `CLAUDE_CODE_TMPDIR` 改位置。mod 讀的就是這一份，所以縮圖和編輯器顯示的，正是你貼上的那張。這個資料夾是 Claude Code 內部的存放方式，不是 API；如果之後位置改了，mod 會改讀剪貼簿。
-- 改過的圖會存到 macOS 的 `/private/tmp/paste-preview/<session>/<N>.png`、Linux 的 `/tmp/paste-preview-<uid>/<session>/<N>.png`（只有你自己讀得到的資料夾），以及 Windows 的 `%TEMP%\paste-preview\<session>\<N>.png`。超過一週的資料夾會自動清掉。
+- 改過的圖會存到 macOS 的 `$TMPDIR/paste-preview/<session>/<N>.png`、Linux 的 `/tmp/paste-preview-<uid>/<session>/<N>.png`（都是只有你自己讀得到的資料夾），以及 Windows 的 `%TEMP%\paste-preview\<session>\<N>.png`。超過一週的資料夾會自動清掉。
 - Linux 和 Windows 上，不是每個系統都內建能做縮圖的工具，所以縮圖列直接從圖檔開頭讀出圖片尺寸，再由終端機自己縮放圖片；編輯完成時，編輯器會順便送回一份 480 px 的副本，給縮圖列使用。
 - 外掛無法修改或新增訊息裡的圖片，只能拿掉。所以按 Enter 時，mod 會拿掉原圖的 image block（`session.append`），並在輸入框的內容旁附上一則給 Claude 的說明（`prompt.submit` context），指明改過的檔案，讓 Claude 去讀。你會在對話紀錄裡看到這次讀檔。輸入框和對話紀錄裡仍然顯示 `[Image #N]`。
 - 為了找出該拿掉哪一個 block，mod 會比對圖片在訊息裡的位置和長寬比。兩者都對不上時，就什麼也不拿掉：這時 Claude 會同時收到原圖和修改後的圖，而不會拿錯張。

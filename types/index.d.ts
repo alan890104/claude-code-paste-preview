@@ -17,10 +17,18 @@ export type Shot = {
   // The thumbnail is the picture itself and past 2 MiB, more than an Image takes as
   // bytes: the band names its file instead and the terminal reads it.
   isLarge: boolean
+  // The session id of the conversation it was pasted in: /clear and /resume change it
+  // while the process goes on, and a number from another conversation is not this one's.
+  session: string
 }
 
 declare module 'claude-code' {
   interface PluginState {
-    'paste-preview': { shots: Shot[]; inBox: number[] }
+    'paste-preview': {
+      // One value per paste, by its number, so a drawing reads only the pictures it
+      // shows and a new paste redraws the band alone, not every sent prompt.
+      shot: StateFamily<Shot>
+      inBox: number[]
+    }
   }
 }
