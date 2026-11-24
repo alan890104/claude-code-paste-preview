@@ -15,6 +15,8 @@
 
 마켓플레이스를 추가하려면 `y`로 답하고, scope를 선택합니다(user scope를 선택하면 모든 세션에서 로드됩니다). 바로 실행되며, 재시작은 필요 없습니다.
 
+**업데이트**: 수정 사항을 바로 받으려면 자동 업데이트를 한 번 켜 두세요: `/plugin` → Marketplaces → `paste-preview` → Turn on auto-update. 그러면 Claude Code가 시작할 때마다 업데이트하고 `/reload-plugins`를 실행하라고 알려 줍니다. 자동 업데이트를 켜지 않아도 새 버전이 나오면 paste-preview가 직접 알려 줍니다. 하루에 한 번 GitHub에서 자신의 `plugin.json`을 읽을 뿐, 사용자에 관한 정보는 아무것도 보내지 않습니다. 끄려면: `/plugin` → `paste-preview` → Configure options → Check for updates, 또는 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`를 설정하세요.
+
 https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 
 [Claude Code](https://claude.com/claude-code)용 mod로, 붙여넣은 이미지를 다룹니다. 터미널에서는 붙여넣은 이미지가 `[Image #1]`로만 표시되어서, 세 번쯤 붙여넣고 나면 어느 것이 어느 것인지 알 수 없게 됩니다. 이 mod를 설치하면 다음과 같이 됩니다.
@@ -62,7 +64,7 @@ https://github.com/user-attachments/assets/7098c51e-ce1e-43ad-9fe3-5189ef1fdb88
 ## 동작 방식
 
 - Claude Code는 붙여넣을 때마다 이미지를 `<tmp>/claude-<uid>/<project>/<session>/images/<N>.png`에 저장합니다(`<tmp>`는 macOS에서는 `/tmp`, Linux에서는 `$TMPDIR` 또는 `/tmp`). Windows에서는 `%TEMP%\claude\<project>\<session>\images\<N>.png`이며, 세 운영체제 모두 `CLAUDE_CODE_TMPDIR`로 위치를 바꿀 수 있습니다. mod는 이 사본을 읽기 때문에, 썸네일과 편집기에는 붙여넣은 이미지가 그대로 표시됩니다. 이 폴더는 Claude Code 내부의 구조일 뿐 API가 아닙니다. 위치가 바뀌면 mod는 클립보드를 읽는 방식으로 대체합니다.
-- 편집한 이미지는 macOS에서는 `/private/tmp/paste-preview/<session>/<N>.png`에, Linux에서는 `/tmp/paste-preview-<uid>/<session>/<N>.png`(본인만 읽을 수 있는 폴더)에, Windows에서는 `%TEMP%\paste-preview\<session>\<N>.png`에 저장됩니다. 일주일이 지난 폴더는 삭제됩니다.
+- 편집한 이미지는 macOS에서는 본인 전용 임시 폴더(`/var/folders/…/T/paste-preview/<session>/<N>.png`)에, Linux에서는 `/tmp/paste-preview-<uid>/<session>/<N>.png`(둘 다 본인만 읽을 수 있는 폴더)에, Windows에서는 `%TEMP%\paste-preview\<session>\<N>.png`에 저장됩니다. 일주일이 지난 폴더는 삭제됩니다.
 - Linux와 Windows에는 모든 시스템에 기본으로 들어 있는 썸네일 생성 도구가 없습니다. 그래서 썸네일 띠는 이미지 헤더에서 크기를 읽고, 이미지 축소는 터미널이 직접 처리합니다. 편집한 이미지는 편집기에서 띠에 쓸 480 px 사본과 함께 돌아옵니다.
 - 플러그인은 메시지 안의 이미지를 바꾸거나 추가할 수 없고, 제거만 할 수 있습니다. 그래서 Enter를 누르는 시점에 mod는 원본 붙여넣기의 image block을 제거하고(`session.append`), 입력 내용 옆에 편집된 파일을 알려 주는 Claude용 메모(`prompt.submit` context)를 덧붙입니다. Claude는 그 파일을 읽습니다. 이 읽기는 대화 기록에서 볼 수 있습니다. 입력창과 대화 기록에는 계속 `[Image #N]`이 표시됩니다.
 - 올바른 block을 찾기 위해 mod는 메시지 안에서 이미지의 위치와 가로세로 비율을 확인합니다. 둘 다 맞지 않으면 아무것도 제거하지 않습니다. 그러면 Claude는 원본과 편집본을 모두 받게 되고, 엉뚱한 이미지가 제거되는 일은 없습니다.
@@ -84,6 +86,7 @@ claude --plugin-dir .            # run Claude Code with the mod loaded from this
 claude plugin validate .         # what the engine will load and refuse
 claude plugin test .             # hooks/*.test.tsx: the band, the send, and a paste on each system
 node test/e2e.mjs [--clipboard]  # the mod's own commands for real on this machine (Node 22.6+)
+node test/editor.mjs              # the editor page alone: undo, and memory across pictures
 node test/live.mjs               # Linux, Windows: a live session pasted into, offline
 ```
 

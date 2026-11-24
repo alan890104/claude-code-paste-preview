@@ -1,11 +1,37 @@
 {
   "name": "paste-preview",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "See and mark up the images you paste into Claude Code: thumbnails above the prompt and in the transcript, and an editor that opens on paste",
-  "author": { "name": "alan890104", "url": "https://github.com/alan890104" },
+  "author": {
+    "name": "alan890104",
+    "url": "https://github.com/alan890104"
+  },
   "homepage": "https://github.com/alan890104/claude-code-paste-preview",
   "repository": "https://github.com/alan890104/claude-code-paste-preview",
   "license": "MIT",
-  "keywords": ["image", "paste", "screenshot", "annotate", "markup", "preview", "macos", "linux", "windows"],
-  "types": "./types/index.d.ts"
+  "keywords": [
+    "image",
+    "paste",
+    "screenshot",
+    "annotate",
+    "markup",
+    "preview",
+    "macos",
+    "linux",
+    "windows"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "updateCheck": {
+      "type": "boolean",
+      "title": "Check for updates",
+      "description": "Once a day, ask GitHub whether a newer paste-preview is out, and say so. Nothing about you is sent.",
+      "default": true
+    }
+  },
+  "network": {
+    "hosts": [
+      "raw.githubusercontent.com"
+    ]
+  }
 }
