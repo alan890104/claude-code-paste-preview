@@ -88,7 +88,7 @@ node test/editor.mjs              # the editor page alone: undo, and memory acro
 node test/live.mjs               # Linux, Windows: a live session pasted into, offline
 ```
 
-`test/e2e.mjs`는 클립보드에 이미지를 넣고 mod가 실행하는 명령으로 다시 읽어 옵니다. 그다음 mod와 같은 방식으로 편집기 서버를 시작하고, 헤드리스 브라우저로 페이지에 그림을 그린 뒤, 편집된 이미지가 mod가 읽는 위치에 저장되는지 확인합니다. `playwright-core`(`PLAYWRIGHT_DIR`에는 그 `node_modules`가 들어 있는 폴더를 지정합니다)와 Chrome이 필요합니다. `test/live.mjs`는 mod를 로드한 Claude Code 자체를 의사 터미널(`@lydell/node-pty`, 같은 폴더에 있음)에서 실행하고, Claude Code의 붙여넣기 키로 붙여넣은 뒤, mod가 연 편집기에서 그림을 그리고, Enter를 눌러 대화 기록을 읽습니다. 사용하는 API 키는 임의로 만든 것이고 API 주소는 닫힌 로컬 포트이므로, 아무것도 전송되지 않습니다. CI(`.github/workflows/test.yml`)는 macOS, Linux, Windows에서 플러그인 테스트와 함께 이들을 실행합니다(라이브 세션은 Linux와 Windows에서).
+`test/e2e.mjs`는 클립보드에 이미지를 넣고 mod가 실행하는 명령으로 다시 읽어 옵니다. 그다음 mod와 같은 방식으로 편집기 서버를 시작하고, 헤드리스 브라우저로 페이지에 그림을 그린 뒤, 편집된 이미지가 mod가 읽는 위치에 저장되는지 확인합니다. `playwright-core`(`PLAYWRIGHT_DIR`에는 그 `node_modules`가 들어 있는 폴더를 지정합니다)와 Chrome이 필요합니다. `test/live.mjs`는 mod를 로드한 Claude Code 자체를 의사 터미널(`@lydell/node-pty`, 같은 폴더에 있음)에서 실행하고, Claude Code의 붙여넣기 키로 붙여넣은 뒤, mod가 연 편집기에서 그림을 그리고, Enter를 눌러 대화 기록을 읽습니다. 사용하는 API 키는 임의로 만든 것이고 API 주소는 닫힌 로컬 포트이므로, 아무것도 전송되지 않습니다. CI(`.github/workflows/test.yml`)는 풀 리퀘스트와 main으로의 push마다 Linux와 Windows에서 플러그인 테스트와 함께 이들을 실행합니다(라이브 세션 포함). macOS는 직접 시작할 때만 실행됩니다(Actions → test → Run workflow에서 “macOS” 선택). Actions 사용 시간이 과금되는 환경에서는 macOS 러너 비용이 Linux의 약 10배이기 때문입니다.
 
 이 폴더를 한 번 로드하면 엔진의 타입 선언이 `.claude-plugin/types/`에 기록됩니다. 그 후에는 `tsc -p .`로 mod를 타입 검사할 수 있습니다.
 

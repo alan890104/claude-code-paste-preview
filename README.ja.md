@@ -88,7 +88,7 @@ node test/editor.mjs              # the editor page alone: undo, and memory acro
 node test/live.mjs               # Linux, Windows: a live session pasted into, offline
 ```
 
-`test/e2e.mjs` は、クリップボードに画像を置き、mod が実行するコマンドで読み戻します。続いて mod と同じようにエディタのサーバーを起動し、ヘッドレスブラウザでページに描画して、編集後の画像が mod の読み取る場所に保存されることを確認します。`playwright-core`（`PLAYWRIGHT_DIR` には、その `node_modules` が入っているフォルダを指定します）と Chrome が必要です。`test/live.mjs` は、mod を読み込んだ Claude Code 自体を疑似端末（`@lydell/node-pty`、同じフォルダ内）で起動し、Claude Code 自身のキーで貼り付け、mod が開いたエディタで描画し、Enter を押して、会話履歴を読み取ります。使う API キーは適当に作ったもので、API のアドレスは閉じたローカルポートなので、何も送信されません。CI（`.github/workflows/test.yml`）は、macOS、Linux、Windows でプラグインのテストと一緒にこれらを実行します（ライブセッションは Linux と Windows）。
+`test/e2e.mjs` は、クリップボードに画像を置き、mod が実行するコマンドで読み戻します。続いて mod と同じようにエディタのサーバーを起動し、ヘッドレスブラウザでページに描画して、編集後の画像が mod の読み取る場所に保存されることを確認します。`playwright-core`（`PLAYWRIGHT_DIR` には、その `node_modules` が入っているフォルダを指定します）と Chrome が必要です。`test/live.mjs` は、mod を読み込んだ Claude Code 自体を疑似端末（`@lydell/node-pty`、同じフォルダ内）で起動し、Claude Code 自身のキーで貼り付け、mod が開いたエディタで描画し、Enter を押して、会話履歴を読み取ります。使う API キーは適当に作ったもので、API のアドレスは閉じたローカルポートなので、何も送信されません。CI（`.github/workflows/test.yml`）は、プルリクエストと main への push のたびに、Linux と Windows でプラグインのテストと一緒にこれらを実行します（ライブセッションを含む）。macOS は手動で起動したときだけ実行されます（Actions → test → Run workflow で「macOS」にチェック）。Actions の利用時間が課金される環境では、macOS ランナーは Linux の約 10 倍の費用がかかるためです。
 
 このフォルダを一度読み込むと、エンジンの型宣言が `.claude-plugin/types/` に書き出されます。それ以降は、`tsc -p .` で mod を型チェックできます。
 

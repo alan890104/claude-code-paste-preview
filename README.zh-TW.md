@@ -88,7 +88,7 @@ node test/editor.mjs              # the editor page alone: undo, and memory acro
 node test/live.mjs               # Linux, Windows: a live session pasted into, offline
 ```
 
-`test/e2e.mjs` 會把一張圖放進剪貼簿，再用 mod 自己執行的指令讀回來；接著像 mod 一樣啟動編輯器的伺服器，用無頭瀏覽器在頁面上作畫，並檢查編輯後的圖有存到 mod 讀取的位置。它需要 `playwright-core`（用 `PLAYWRIGHT_DIR` 指向一個 `node_modules` 裡有它的資料夾）和 Chrome。`test/live.mjs` 會在偽終端機（`@lydell/node-pty`，在同一個資料夾裡）中啟動載入 mod 的 Claude Code 本體，用 Claude Code 自己的按鍵貼圖，在 mod 打開的編輯器裡作畫，按 Enter，再讀對話紀錄；它用的 API key 是隨便編的，API 位址是一個沒在監聽的本機 port，所以不會送出任何東西。CI（`.github/workflows/test.yml`）會在 macOS、Linux 和 Windows 上連同外掛測試一起執行它們（live session 只在 Linux 和 Windows 上執行）。
+`test/e2e.mjs` 會把一張圖放進剪貼簿，再用 mod 自己執行的指令讀回來；接著像 mod 一樣啟動編輯器的伺服器，用無頭瀏覽器在頁面上作畫，並檢查編輯後的圖有存到 mod 讀取的位置。它需要 `playwright-core`（用 `PLAYWRIGHT_DIR` 指向一個 `node_modules` 裡有它的資料夾）和 Chrome。`test/live.mjs` 會在偽終端機（`@lydell/node-pty`，在同一個資料夾裡）中啟動載入 mod 的 Claude Code 本體，用 Claude Code 自己的按鍵貼圖，在 mod 打開的編輯器裡作畫，按 Enter，再讀對話紀錄；它用的 API key 是隨便編的，API 位址是一個沒在監聽的本機 port，所以不會送出任何東西。CI（`.github/workflows/test.yml`）會在每個 pull request 和推到 main 時，於 Linux 和 Windows 上連同外掛測試一起執行它們（包含 live session）。macOS 只在手動啟動時執行（Actions → test → Run workflow，勾選「macOS」）：只要 Actions 的分鐘數需要計費，macOS runner 的費用大約是 Linux 的十倍。
 
 載入過這個資料夾一次之後，引擎的型別宣告會寫到 `.claude-plugin/types/`；之後用 `tsc -p .` 就能對 mod 做型別檢查。
 

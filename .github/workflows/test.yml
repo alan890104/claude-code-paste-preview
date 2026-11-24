@@ -1,23 +1,41 @@
 # The plugin's tests inside the engine, then its commands for real on each system:
 # the clipboard read back with the mod's own commands, the editor server started as the
-# mod starts it, its page driven headless through a stroke and Done (test/e2e.mjs); and
-# on Linux and Windows a live Claude Code session, pasted into (test/live.mjs).
+# mod starts it, its page driven headless through a stroke and Done (test/e2e.mjs), the
+# page as the macOS panel keeps it warm, one picture after another (test/editor.mjs);
+# and on Linux and Windows a live Claude Code session, pasted into (test/live.mjs).
+#
+# Linux and Windows run on every pull request and on main. macOS never runs by itself:
+# a macOS runner costs about ten times a Linux one wherever minutes are billed (a private
+# copy of this repository, an organization's runners), so it runs only when started by
+# hand from the Actions tab with "macOS" ticked.
 name: test
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      macos:
+        description: Also run on macOS (the Swift panel, pngpaste). Billed wherever Actions minutes are.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+
+# A newer push to a pull request makes its older run moot. Runs on main, and runs started
+# by hand, each finish: every commit on main is checked, and a macOS run is never lost.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   test:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.macos && '["ubuntu-latest","windows-latest","macos-latest"]' || '["ubuntu-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -44,6 +62,10 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/pw" playwright-core@1.48.2 @lydell/node-pty@1.2.0-beta.15
           echo "PLAYWRIGHT_DIR=$RUNNER_TEMP/pw" >> "$GITHUB_ENV"
           echo "E2E_SHOTS=$RUNNER_TEMP/shots" >> "$GITHUB_ENV"
+
+      # The editor page alone, in a headless browser: no window, clipboard or server.
+      - name: Editor page
+        run: node test/editor.mjs
 
       # And CJK fonts, as a desktop set to Chinese, Japanese or Korean has, so the editor's
       # words are measured in real glyphs rather than empty boxes.
