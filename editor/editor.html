@@ -177,6 +177,9 @@ if (!/Mac|iPhone|iPad/.test(navigator.platform)) document.getElementById('undo')
 
 const COLORS = ['#ff3b30', '#ff9f0a', '#ffd60a', '#30d158', '#0a84ff', '#ffffff', '#000000']
 const HISTORY = 30
+// Undo keeps whole copies of the picture, 4 bytes a pixel: a 5K screenshot's is 59 MB,
+// so thirty of them were 1.7 GB. They are kept to this much, the oldest let go first.
+const HISTORY_BYTES = 512 * 1024 * 1024
 const view = document.getElementById('view')
 const ctx = view.getContext('2d')
 const stage = document.getElementById('stage')
@@ -204,10 +207,25 @@ const lineWidth = () => Math.max(3, Math.round(Math.max(base.width, base.height)
 const fontSize = () => Math.max(16, Math.round(Math.max(base.width, base.height) / 36))
 const contrast = c => (c === '#ffffff' || c === '#ffd60a' || c === '#30d158' || c === '#ff9f0a' ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.85)')
 
-const remember = () => {
-  history.push(copy(base))
-  if (history.length > HISTORY) history.shift()
+// A canvas no longer drawn from gives its pixels back now, not whenever the page's
+// garbage is next collected: the warm panel (macOS) keeps one page for the whole
+// session, and every picture it opened stayed in memory a while longer.
+const free = c => {
+  if (c === base) return
+  c.width = 0
+  c.height = 0
 }
+// Steps let go this way can no longer be undone, but are still in the picture.
+let dropped = 0
+const keep = c => {
+  history.push(c)
+  const bytes = () => history.reduce((sum, h) => sum + h.width * h.height * 4, 0)
+  while (history.length > HISTORY || (history.length > 1 && bytes() > HISTORY_BYTES)) {
+    free(history.shift())
+    dropped += 1
+  }
+}
+const remember = () => keep(copy(base))
 
 const fit = () => {
   const room = stage.getBoundingClientRect()
@@ -354,9 +372,10 @@ const applyCrop = () => {
     paint()
     return false
   }
-  remember()
+  // The picture before the crop is the undo step itself: no copy of it is made.
   const next = canvasOf(r.w, r.h)
   next.getContext('2d').drawImage(base, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h)
+  keep(base)
   setBase(next)
   return true
 }
@@ -472,11 +491,12 @@ const release = () => {
     repaint()
     return
   }
+  // A shape too small to see is no step: nothing is copied for undo, nothing let go.
+  if (done.kind !== 'pen' && Math.hypot(done.to.x - done.from.x, done.to.y - done.from.y) <= 3) return paint()
   remember()
   const g = base.getContext('2d')
   if (done.kind === 'pen') drawPen(g, done.points, color, lineWidth())
-  else if (Math.hypot(done.to.x - done.from.x, done.to.y - done.from.y) > 3) drawShape(g, done.kind, done.from, done.to, color, lineWidth(), done.isEven)
-  else history.pop()
+  else drawShape(g, done.kind, done.from, done.to, color, lineWidth(), done.isEven)
   paint()
 }
 view.addEventListener('pointerup', release)
@@ -524,12 +544,12 @@ const rotate = () => {
   commitNote()
   crop = null
   placeApply()
-  remember()
   const next = canvasOf(base.height, base.width)
   const g = next.getContext('2d')
   g.translate(next.width, 0)
   g.rotate(Math.PI / 2)
   g.drawImage(base, 0, 0)
+  keep(base)
   setBase(next)
 }
 
@@ -546,7 +566,10 @@ const undo = () => {
     return
   }
   const last = history.pop()
-  if (last) setBase(last)
+  if (!last) return
+  const was = base
+  setBase(last)
+  free(was)
 }
 
 const post = (path, body) => fetch(`${path}?t=${token}`, { method: 'POST', body })
@@ -585,7 +608,7 @@ const finish = async () => {
   applyCrop()
   isFinished = true
   // Nothing changed: the paste stays as it was, not a re-encoded copy.
-  if (history.length === 0) {
+  if (history.length === 0 && dropped === 0) {
     if (host) return host.postMessage({ kind: 'cancel' })
     await post('/cancel')
   } else {
@@ -673,11 +696,38 @@ document.fonts.ready.then(tighten)
 
 // ——— open ———
 
+// The picture is decoded once, into the first canvas, and the decoded copy let go: an
+// <img> kept one for every picture the warm panel opened, a full-size bitmap per paste
+// for as long as the session ran. Where that way is missing or fails (Safari before 15
+// has no createImageBitmap) the <img> below is used, as before. Each load is numbered:
+// one that lands after the next picture was opened, or the panel closed, is dropped.
 const picture = new Image()
-picture.onload = () => {
-  const first = canvasOf(picture.naturalWidth, picture.naturalHeight)
-  first.getContext('2d').drawImage(picture, 0, 0)
+let loading = 0
+let imageFor = 0
+const load = async url => {
+  const mine = ++loading
+  try {
+    if (typeof createImageBitmap !== 'function') throw new Error('no createImageBitmap')
+    // No options: older engines refuse some, and a paste carries no rotation to undo.
+    const bitmap = await createImageBitmap(await (await fetch(url)).blob())
+    try {
+      if (mine === loading) shown(bitmap, bitmap.width, bitmap.height)
+    } finally {
+      bitmap.close()
+    }
+  } catch {
+    if (mine !== loading) return
+    imageFor = mine
+    picture.src = url
+  }
+}
+picture.onload = () => imageFor === loading && shown(picture, picture.naturalWidth, picture.naturalHeight)
+const shown = (source, width, height) => {
+  const first = canvasOf(width, height)
+  first.getContext('2d').drawImage(source, 0, 0)
+  const was = base
   setBase(first)
+  free(was)
   // The window takes the picture's shape, at most most of the screen.
   if (host) return host.postMessage({ kind: 'size', width: first.width, height: first.height })
   const bar = 70
@@ -692,11 +742,13 @@ picture.onload = () => {
   } catch {}
 }
 // A picture that cannot be read keeps the paste as it was.
-picture.onerror = () => cancel()
+picture.onerror = () => imageFor === loading && cancel()
 
 // Every picture starts as the first did: nothing drawn, the pen, red.
 const clear = () => {
+  for (const c of history) free(c)
   history = []
+  dropped = 0
   crop = null
   drag = null
   noteAt = null
@@ -711,17 +763,20 @@ const clear = () => {
 window.openPicture = (id, name) => {
   clear()
   document.title = titleOf(name)
-  picture.src = `/image?id=${encodeURIComponent(id)}`
+  void load(`/image?id=${encodeURIComponent(id)}`)
 }
 window.closePicture = () => {
+  loading += 1
   clear()
   picture.removeAttribute('src')
   // The last picture's pixels go; a canvas of none cannot be drawn, so one of one.
+  const was = base
   setBase(canvasOf(1, 1))
+  free(was)
 }
 
 if (isWarm && host) host.postMessage({ kind: 'warm' })
-else picture.src = `/image?t=${token}`
+else void load(`/image?t=${token}`)
 </script>
 </body>
 </html>

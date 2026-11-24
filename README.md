@@ -84,6 +84,7 @@ claude --plugin-dir .            # run Claude Code with the mod loaded from this
 claude plugin validate .         # what the engine will load and refuse
 claude plugin test .             # hooks/*.test.tsx: the band, the send, and a paste on each system
 node test/e2e.mjs [--clipboard]  # the mod's own commands for real on this machine (Node 22.6+)
+node test/editor.mjs              # the editor page alone: undo, and memory across pictures
 node test/live.mjs               # Linux, Windows: a live session pasted into, offline
 ```
 
